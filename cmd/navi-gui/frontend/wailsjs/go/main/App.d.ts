@@ -6,12 +6,22 @@ export function Ask(arg1:string):Promise<navi.Result>;
 
 export function DumpContext():Promise<string>;
 
+export function GetAPIKey():Promise<string>;
+
+export function GetBaseURL():Promise<string>;
+
 export function GetContextText():Promise<string>;
 
 export function GetStats():Promise<navi.Stats>;
 
+export function MaskedAPIKey():Promise<string>;
+
 export function PretendAgent(arg1:string):Promise<boolean>;
 
 export function ResetHistory():Promise<boolean>;
+
+export function SetAPIKey(arg1:string):Promise<boolean>;
+
+export function SetBaseURL(arg1:string):Promise<boolean>;
 
 export function SetModel(arg1:string):Promise<boolean>;

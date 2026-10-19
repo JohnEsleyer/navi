@@ -35,7 +35,7 @@ func TestSlashCommandsAreFree(t *testing.T) {
 
 	commands := []string{
 		"/help", "/stats", "/history", "/model", "/model gpt-4o-mini",
-		"/clear", "/dump", "/nosuchcmd", "/",
+		"/key", "/baseurl", "/clear", "/dump", "/nosuchcmd", "/",
 	}
 	for _, cmd := range commands {
 		res, err := app.Ask(cmd)
@@ -78,5 +78,51 @@ func TestAskBeforeStartup(t *testing.T) {
 
 	if _, err := app.Ask("hello"); err != nil {
 		t.Fatalf("Ask with nil ctx failed: %v", err)
+	}
+}
+
+// TestKeyAndBaseURLCommandsAreFree guards the same billing bug for the new
+// key/endpoint commands: inspecting or setting a key must never reach the API.
+func TestKeyAndBaseURLCommandsAreFree(t *testing.T) {
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"message": map[string]string{"role": "assistant", "content": "fake"}}},
+			"usage":   map[string]int{"prompt_tokens": 10, "completion_tokens": 5},
+		})
+	}))
+	defer srv.Close()
+
+	app := NewApp()
+	app.engine = newTestEngine(srv.URL)
+	app.startup(nil)
+
+	// Inspect (no args) and set (with args) must both be free.
+	for _, cmd := range []string{"/key", "/key my-new-token", "/baseurl", "/baseurl http://example.invalid/v1"} {
+		res, err := app.Ask(cmd)
+		if err != nil {
+			t.Fatalf("%q: unexpected error: %v", cmd, err)
+		}
+		if res.Meta.TurnCost != 0 || res.Meta.PromptTokens != 0 {
+			t.Errorf("%q: reported billed tokens: %+v", cmd, res.Meta)
+		}
+	}
+
+	if requests != 0 {
+		t.Errorf("key/baseurl commands reached the LLM API %d time(s); they must be free", requests)
+	}
+
+	// The key set above must actually have been applied.
+	if app.GetAPIKey() != "my-new-token" {
+		t.Errorf("key was not set, got: %q", app.GetAPIKey())
+	}
+	if app.GetBaseURL() != "http://example.invalid/v1" {
+		t.Errorf("baseurl was not set, got: %q", app.GetBaseURL())
+	}
+	// Display must never expose the raw secret.
+	if app.MaskedAPIKey() == "my-new-token" {
+		t.Error("MaskedAPIKey returned the raw key")
 	}
 }

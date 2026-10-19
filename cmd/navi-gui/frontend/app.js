@@ -196,3 +196,73 @@ btnClearContext.addEventListener("click", async () => {
     showToast("Memory reset to zero");
   }
 });
+
+// --- API Key Modal Logic ---
+const btnApiKey = document.getElementById("btn-api-key");
+const keyModal = document.getElementById("key-modal");
+const inputApiKey = document.getElementById("input-api-key");
+const keyMaskedDisplay = document.getElementById("key-masked-display");
+const btnToggleKeyVis = document.getElementById("btn-toggle-key-visibility");
+const keyModalSave = document.getElementById("key-modal-save");
+const keyModalCancel = document.getElementById("key-modal-cancel");
+
+function closeKeyModal() {
+  keyModal.style.display = "none";
+  // Don't leave the secret sitting in the DOM once the dialog is gone.
+  inputApiKey.value = "";
+}
+
+btnApiKey.addEventListener("click", async () => {
+  if (window.go && window.go.main && window.go.main.App) {
+    const masked = await window.go.main.App.MaskedAPIKey();
+    const endpoint = await window.go.main.App.GetBaseURL();
+    keyMaskedDisplay.innerText = `Current: ${masked}`;
+    keyModal.querySelector("#key-modal-desc").innerText =
+      `Endpoint: ${endpoint}`;
+    // Prefill so the key can be edited rather than retyped from scratch.
+    const raw = await window.go.main.App.GetAPIKey();
+    inputApiKey.value = raw || "";
+  }
+  inputApiKey.type = "password";
+  btnToggleKeyVis.innerText = "Show";
+  keyModal.style.display = "flex";
+  inputApiKey.focus();
+});
+
+btnToggleKeyVis.addEventListener("click", () => {
+  if (inputApiKey.type === "password") {
+    inputApiKey.type = "text";
+    btnToggleKeyVis.innerText = "Hide";
+  } else {
+    inputApiKey.type = "password";
+    btnToggleKeyVis.innerText = "Show";
+  }
+});
+
+keyModalCancel.addEventListener("click", closeKeyModal);
+
+// Clicking the backdrop (outside the card) also dismisses.
+keyModal.addEventListener("click", (e) => {
+  if (e.target === keyModal) closeKeyModal();
+});
+
+async function saveApiKey() {
+  const newKey = inputApiKey.value.trim();
+  if (window.go && window.go.main && window.go.main.App) {
+    await window.go.main.App.SetAPIKey(newKey);
+    const masked = await window.go.main.App.MaskedAPIKey();
+    keyMaskedDisplay.innerText = `Current: ${masked}`;
+  }
+  closeKeyModal();
+  showToast(newKey ? "API key updated for this session" : "API key cleared");
+}
+
+keyModalSave.addEventListener("click", saveApiKey);
+inputApiKey.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    saveApiKey();
+  } else if (e.key === "Escape") {
+    closeKeyModal();
+  }
+});

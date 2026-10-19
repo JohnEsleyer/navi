@@ -85,8 +85,22 @@ type Stats struct {
 }
 
 type Engine struct {
-	cfg    Config
-	cfgMu  sync.RWMutex // guards cfg.Model, the only mutable field
+	cfg Config
+	// cfgMu guards cfg.Model, cfg.BaseURL and cfg.APIKey - all of which are
+	// mutable at runtime - plus providerKeys and customBaseURL, which are
+	// read and written alongside them.
+	cfgMu sync.RWMutex
+
+	// customBaseURL records that the endpoint was chosen explicitly (via
+	// Config.BaseURL or SetBaseURL). When set, SetModel must not repoint the
+	// engine at another provider's endpoint, or an explicitly configured
+	// server would be silently overridden by the next model switch.
+	customBaseURL bool
+
+	// providerKeys remembers a key per provider ID, so switching models
+	// restores that provider's key instead of leaving a stale one in place.
+	providerKeys map[string]string
+
 	client *http.Client
 
 	cacheMu sync.RWMutex
@@ -110,11 +124,43 @@ func New(cfg Config) *Engine {
 	if cfg.SystemPrompt == "" {
 		cfg.SystemPrompt = "You are Navi, an ultra-efficient, cost-conscious assistant. Keep answers concise."
 	}
+	if cfg.Model == "" {
+		cfg.Model = "llama-3.1-8b-instant"
+	}
+
+	provider := DetectProvider(cfg.Model)
+
+	// Record whether the CALLER supplied an endpoint, before the resolution
+	// below fills one in. Doing this after the fill would see a non-empty
+	// BaseURL for every engine and mark it as custom, which would pin the
+	// endpoint forever and silently disable provider auto-switching.
+	callerSetBaseURL := cfg.BaseURL != ""
+
+	if cfg.BaseURL == "" {
+		if provider.BaseURL != "" {
+			cfg.BaseURL = provider.BaseURL
+		} else {
+			cfg.BaseURL = "https://api.groq.com/openai/v1"
+		}
+	}
+	cfg.BaseURL = strings.TrimRight(cfg.BaseURL, "/")
+
+	if cfg.APIKey == "" {
+		cfg.APIKey = ResolveKeyForProvider(provider)
+	}
+
+	pKeys := make(map[string]string)
+	if provider.ID != "" && cfg.APIKey != "" {
+		pKeys[provider.ID] = cfg.APIKey
+	}
+
 	return &Engine{
-		cfg:     cfg,
-		client:  &http.Client{Timeout: 60 * time.Second},
-		cache:   make(map[string]string),
-		history: []Message{{Role: "system", Content: cfg.SystemPrompt}},
+		cfg:           cfg,
+		customBaseURL: callerSetBaseURL,
+		providerKeys:  pKeys,
+		client:        &http.Client{Timeout: 60 * time.Second},
+		cache:         make(map[string]string),
+		history:       []Message{{Role: "system", Content: cfg.SystemPrompt}},
 	}
 }
 
@@ -166,7 +212,11 @@ func (e *Engine) Ask(ctx context.Context, input string) (*Result, error) {
 		}, nil
 	}
 
+	// Read model, endpoint and key through locked accessors: all three can be
+	// changed by SetModel/SetBaseURL/SetAPIKey while a call is in flight.
 	model := e.model()
+	baseURL := e.baseURL()
+	apiKey := e.apiKey()
 
 	bodyBytes, err := json.Marshal(chatRequest{
 		Model:       model,
@@ -177,14 +227,14 @@ func (e *Engine) Ask(ctx context.Context, input string) (*Result, error) {
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", e.cfg.BaseURL+"/chat/completions", bytes.NewBuffer(bodyBytes))
+	req, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/chat/completions", bytes.NewBuffer(bodyBytes))
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	if e.cfg.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+e.cfg.APIKey)
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
 	resp, err := e.client.Do(req)
@@ -270,6 +320,58 @@ func (e *Engine) model() string {
 	return e.cfg.Model
 }
 
+func (e *Engine) apiKey() string {
+	e.cfgMu.RLock()
+	defer e.cfgMu.RUnlock()
+	return e.cfg.APIKey
+}
+
+func (e *Engine) baseURL() string {
+	e.cfgMu.RLock()
+	defer e.cfgMu.RUnlock()
+	return e.cfg.BaseURL
+}
+
+// SetAPIKey swaps the key used for subsequent requests, for the current
+// provider, without restarting the session.
+func (e *Engine) SetAPIKey(key string) {
+	key = strings.TrimSpace(key)
+	e.cfgMu.Lock()
+	defer e.cfgMu.Unlock()
+	e.cfg.APIKey = key
+	provider := DetectProvider(e.cfg.Model)
+	if provider.ID != "" {
+		if e.providerKeys == nil {
+			e.providerKeys = make(map[string]string)
+		}
+		e.providerKeys[provider.ID] = key
+	}
+}
+
+func (e *Engine) GetAPIKey() string {
+	return e.apiKey()
+}
+
+// MaskedAPIKey returns a display-safe form of the key. The raw key is never
+// returned here, so it cannot reach logs, screens or screenshots.
+func (e *Engine) MaskedAPIKey() string {
+	return MaskKey(e.apiKey())
+}
+
+// SetBaseURL repoints the engine at another OpenAI-compatible endpoint and
+// marks it explicit, so later SetModel calls leave it alone.
+func (e *Engine) SetBaseURL(url string) {
+	url = strings.TrimRight(strings.TrimSpace(url), "/")
+	e.cfgMu.Lock()
+	defer e.cfgMu.Unlock()
+	e.cfg.BaseURL = url
+	e.customBaseURL = url != ""
+}
+
+func (e *Engine) GetBaseURL() string {
+	return e.baseURL()
+}
+
 func (e *Engine) sessionCost() float64 {
 	e.statsMu.RLock()
 	defer e.statsMu.RUnlock()
@@ -306,6 +408,7 @@ func (e *Engine) DumpContext() (string, error) {
 
 	in, out, cost := e.usageSnapshot()
 	model := e.model()
+	baseURL := e.baseURL()
 
 	e.historyMu.RLock()
 	defer e.historyMu.RUnlock()
@@ -314,7 +417,8 @@ func (e *Engine) DumpContext() (string, error) {
 	buf.WriteString("=====================================================\n")
 	buf.WriteString(fmt.Sprintf("🧚 NAVI CONTEXT DUMP - %s\n", time.Now().Format(time.RFC1123)))
 	buf.WriteString(fmt.Sprintf("Model:        %s\n", model))
-	buf.WriteString(fmt.Sprintf("Endpoint:     %s\n", e.cfg.BaseURL))
+	buf.WriteString(fmt.Sprintf("Endpoint:     %s\n", baseURL))
+	buf.WriteString(fmt.Sprintf("API Key:      %s\n", e.MaskedAPIKey()))
 	buf.WriteString(fmt.Sprintf("Session Cost: $%.6f\n", cost))
 	buf.WriteString(fmt.Sprintf("Tokens In/Out: %d / %d\n", in, out))
 	buf.WriteString("=====================================================\n\n")
@@ -361,14 +465,39 @@ func (e *Engine) ClearCache() {
 	e.cache = make(map[string]string)
 }
 
-// SetModel switches the active model. It also clears the response cache,
-// because the cache key is a hash of the message list only and carries no
-// model identity — without this, switching models keeps serving the previous
-// model's cached replies.
+// SetModel switches the active model. It follows the provider registry: the
+// endpoint moves with the model unless the endpoint was explicitly set, and
+// the remembered key for the new provider is restored if there is one.
+//
+// It also clears the response cache, because the cache key is a hash of the
+// message list only and carries no model identity - without this, switching
+// models keeps serving the previous model's cached replies.
 func (e *Engine) SetModel(model string) {
+	model = strings.TrimSpace(model)
+	provider := DetectProvider(model)
+
 	e.cfgMu.Lock()
-	e.cfg.Model = strings.TrimSpace(model)
+	e.cfg.Model = model
+
+	// If BaseURL was not manually locked, auto-adjust to provider endpoint
+	if !e.customBaseURL && provider.BaseURL != "" {
+		e.cfg.BaseURL = provider.BaseURL
+	}
+
+	// Restore remembered provider key or resolve from environment
+	if provider.ID != "" {
+		if savedKey, exists := e.providerKeys[provider.ID]; exists && savedKey != "" {
+			e.cfg.APIKey = savedKey
+		} else if envKey := ResolveKeyForProvider(provider); envKey != "" {
+			e.cfg.APIKey = envKey
+			if e.providerKeys == nil {
+				e.providerKeys = make(map[string]string)
+			}
+			e.providerKeys[provider.ID] = envKey
+		}
+	}
 	e.cfgMu.Unlock()
+
 	e.ClearCache()
 }
 

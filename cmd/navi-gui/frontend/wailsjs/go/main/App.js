@@ -10,6 +10,14 @@ export function DumpContext() {
   return window['go']['main']['App']['DumpContext']();
 }
 
+export function GetAPIKey() {
+  return window['go']['main']['App']['GetAPIKey']();
+}
+
+export function GetBaseURL() {
+  return window['go']['main']['App']['GetBaseURL']();
+}
+
 export function GetContextText() {
   return window['go']['main']['App']['GetContextText']();
 }
@@ -18,12 +26,24 @@ export function GetStats() {
   return window['go']['main']['App']['GetStats']();
 }
 
+export function MaskedAPIKey() {
+  return window['go']['main']['App']['MaskedAPIKey']();
+}
+
 export function PretendAgent(arg1) {
   return window['go']['main']['App']['PretendAgent'](arg1);
 }
 
 export function ResetHistory() {
   return window['go']['main']['App']['ResetHistory']();
+}
+
+export function SetAPIKey(arg1) {
+  return window['go']['main']['App']['SetAPIKey'](arg1);
+}
+
+export function SetBaseURL(arg1) {
+  return window['go']['main']['App']['SetBaseURL'](arg1);
 }
 
 export function SetModel(arg1) {

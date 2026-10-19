@@ -19,9 +19,9 @@ func NewApp() *App {
 	baseURL := os.Getenv("NAVI_BASE_URL")
 	model := os.Getenv("NAVI_MODEL")
 
-	if baseURL == "" {
-		baseURL = "https://api.groq.com/openai/v1"
-	}
+	// BaseURL is deliberately not defaulted. navi.New picks the endpoint from
+	// the model via the provider registry, so forcing one here would pin it
+	// and break switching models across providers.
 	if model == "" {
 		model = "llama-3.1-8b-instant"
 	}
@@ -66,35 +66,53 @@ func (a *App) handleCommand(input string) *navi.Result {
 	}
 
 	if name == "" {
-		return a.localResult("Type a message, or one of: /help /stats /history /model /clear /dump /exit")
+		return a.localResult("Type a message, or one of: /help /key /model /baseurl /stats /history /clear /dump /exit")
 	}
 
 	switch name {
 	case "help":
 		return a.localResult(
-			"/help    show this list\n" +
-				"/stats   session tokens, cost, cache size\n" +
-				"/history show the current context window\n" +
-				"/model   inspect or switch model (e.g. /model gpt-4o-mini)\n" +
-				"/clear   reset the context window\n" +
-				"/dump    write the context window to a .txt file\n" +
-				"/exit    quit the GUI")
+			"/help     show this list\n" +
+				"/key      inspect or set API key (/key <secret>)\n" +
+				"/model    inspect or switch model (e.g. /model gpt-4o-mini)\n" +
+				"/baseurl  inspect or switch endpoint (e.g. /baseurl http://localhost:11434/v1)\n" +
+				"/stats    session tokens, cost, cache size\n" +
+				"/history  show the current context window\n" +
+				"/clear    reset the context window\n" +
+				"/dump     write the context window to a .txt file\n" +
+				"/exit     quit the GUI")
+
+	case "key":
+		if args == "" {
+			return a.localResult(fmt.Sprintf("Active API Key: %s\nEndpoint: %s\nUse /key <api_key> to update. Keys are per-session and never written to disk.",
+				a.engine.MaskedAPIKey(), a.engine.GetBaseURL()))
+		}
+		a.engine.SetAPIKey(args)
+		return a.localResult(fmt.Sprintf("✔ API key updated (%s)", a.engine.MaskedAPIKey()))
+
+	case "baseurl":
+		if args == "" {
+			return a.localResult("Current Base URL: " + a.engine.GetBaseURL())
+		}
+		a.engine.SetBaseURL(args)
+		return a.localResult("✔ Switched base URL to: " + a.engine.GetBaseURL())
 
 	case "stats":
 		s := a.engine.GetStats()
 		return a.localResult(fmt.Sprintf(
-			"Model:        %s\nInput tokens:  %d\nOutput tokens: %d\nTotal cost:    $%.6f\nCache entries: %d\nBuffer depth:  %d messages",
-			s.Model, s.InputTokens, s.OutputTokens, s.TotalCost, s.CacheEntries, s.HistoryDepth))
+			"Model:        %s\nEndpoint:     %s\nInput tokens:  %d\nOutput tokens: %d\nTotal cost:    $%.6f\nCache entries: %d\nBuffer depth:  %d messages",
+			s.Model, a.engine.GetBaseURL(), s.InputTokens, s.OutputTokens, s.TotalCost, s.CacheEntries, s.HistoryDepth))
 
 	case "history":
 		return a.localResult(a.engine.GetContextText())
 
 	case "model":
 		if args == "" {
-			return a.localResult("Current model: " + a.engine.GetStats().Model)
+			return a.localResult(fmt.Sprintf("Current model: %s (Endpoint: %s)", a.engine.GetStats().Model, a.engine.GetBaseURL()))
 		}
 		a.engine.SetModel(args)
-		return a.localResult("Switched model to " + args + " (cache cleared)")
+		return a.localResult(fmt.Sprintf("Switched model to %s (Endpoint: %s, Key: %s)",
+			args, a.engine.GetBaseURL(), a.engine.MaskedAPIKey()))
 
 	case "clear":
 		a.engine.ResetHistory()
@@ -155,4 +173,30 @@ func (a *App) SetModel(model string) bool {
 
 func (a *App) GetStats() navi.Stats {
 	return a.engine.GetStats()
+}
+
+// --- API key & endpoint management ---
+
+func (a *App) SetAPIKey(key string) bool {
+	a.engine.SetAPIKey(key)
+	return true
+}
+
+// GetAPIKey returns the raw key. It exists so the settings dialog can offer
+// the current value for editing; prefer MaskedAPIKey for anything displayed.
+func (a *App) GetAPIKey() string {
+	return a.engine.GetAPIKey()
+}
+
+func (a *App) MaskedAPIKey() string {
+	return a.engine.MaskedAPIKey()
+}
+
+func (a *App) SetBaseURL(url string) bool {
+	a.engine.SetBaseURL(url)
+	return true
+}
+
+func (a *App) GetBaseURL() string {
+	return a.engine.GetBaseURL()
 }

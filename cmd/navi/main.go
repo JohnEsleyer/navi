@@ -140,6 +140,42 @@ func registerCommands() {
 		},
 	}
 
+	commandRegistry["key"] = SlashCommand{
+		Name:        "/key",
+		Args:        "[api_key]",
+		Description: "Inspect or update API key for current session",
+		Execute: func(engine *navi.Engine, args string) bool {
+			if strings.TrimSpace(args) == "" {
+				fmt.Printf("Active API Key: %s%s%s (Endpoint: %s%s%s)\n",
+					ColorYellow, engine.MaskedAPIKey(), ColorReset,
+					ColorCyan, engine.GetBaseURL(), ColorReset)
+				fmt.Printf("Run %s/key <your-api-key>%s to update it.\n", ColorBold, ColorReset)
+				fmt.Printf("%sKeys are per-session and never written to disk.%s\n", ColorDim, ColorReset)
+				return false
+			}
+			engine.SetAPIKey(args)
+			fmt.Printf("%s✔ API key updated (%s)%s\n", ColorGreen, engine.MaskedAPIKey(), ColorReset)
+			return false
+		},
+	}
+
+	commandRegistry["baseurl"] = SlashCommand{
+		Name:        "/baseurl",
+		Args:        "[url]",
+		Description: "Inspect or set API base URL (e.g. /baseurl http://localhost:11434/v1)",
+		Execute: func(engine *navi.Engine, args string) bool {
+			if strings.TrimSpace(args) == "" {
+				fmt.Printf("Current Base URL: %s%s%s\n", ColorCyan, engine.GetBaseURL(), ColorReset)
+				fmt.Printf("Run %s/baseurl <url>%s to change it; it then stays fixed across /model switches.\n",
+					ColorBold, ColorReset)
+				return false
+			}
+			engine.SetBaseURL(args)
+			fmt.Printf("%s✔ Switched base URL to %s%s\n", ColorGreen, engine.GetBaseURL(), ColorReset)
+			return false
+		},
+	}
+
 	commandRegistry["exit"] = SlashCommand{
 		Name:        "/exit",
 		Args:        "",
@@ -180,9 +216,14 @@ func printCommandPreview(filter string) {
 func launchGUI(engine *navi.Engine) {
 	cmd, how := guiCommand(engine)
 
-	// Hand the GUI the model currently active in this session, so a /model
-	// switch here isn't silently lost. Existing env vars are preserved.
-	cmd.Env = append(os.Environ(), "NAVI_MODEL="+engine.GetStats().Model)
+	// Hand the GUI the model, key and endpoint currently active in this
+	// session, so a /model, /key or /baseurl switch here isn't silently lost.
+	// Existing env vars are preserved; these only fill in what's missing.
+	cmd.Env = append(os.Environ(),
+		"NAVI_MODEL="+engine.GetStats().Model,
+		"NAVI_API_KEY="+engine.GetAPIKey(),
+		"NAVI_BASE_URL="+engine.GetBaseURL(),
+	)
 
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -282,9 +323,10 @@ func main() {
 	baseURL := os.Getenv("NAVI_BASE_URL")
 	model := os.Getenv("NAVI_MODEL")
 
-	if baseURL == "" {
-		baseURL = "https://api.groq.com/openai/v1"
-	}
+	// BaseURL is deliberately NOT defaulted here. navi.New resolves the
+	// endpoint from the model via the provider registry, so forcing a value
+	// would pin the endpoint and break /model switching between providers.
+	// An explicit NAVI_BASE_URL still wins and stays fixed.
 	if model == "" {
 		model = "llama-3.1-8b-instant"
 	}
@@ -296,7 +338,7 @@ func main() {
 		MaxHistory: 6,
 	})
 
-	printHeader(model, baseURL)
+	printHeader(engine.GetStats().Model, engine.GetBaseURL())
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for {

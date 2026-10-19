@@ -62,6 +62,16 @@
           </div>
         </div>
 
+        <!-- API Key Button -->
+        <button class="btn" id="btn-api-key" title="Configure API Key">
+          <svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="7.5" cy="15.5" r="5.5"/>
+            <path d="m21 2-9.6 9.6"/>
+            <path d="m15.5 7.5 3 3L22 7l-3-3"/>
+          </svg>
+          <span>API Key</span>
+        </button>
+
         <!-- Copy Context Button -->
         <button class="btn" id="btn-copy-context" title="Copy context window to clipboard">
           <svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -136,6 +146,27 @@
       <p id="modal-body">This is a custom dialog.</p>
       <div class="modal-actions" id="modal-actions">
         <button class="btn btn-primary" id="modal-btn-ok">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- API Key Configuration Modal -->
+  <div class="custom-modal-backdrop" id="key-modal">
+    <div class="custom-modal-card">
+      <h3 id="key-modal-title">API Key Settings</h3>
+      <p id="key-modal-desc">Configure the API key for the current provider or custom endpoint.</p>
+      <div class="key-modal-body">
+        <label class="modal-label" for="input-api-key">API Key</label>
+        <input type="password" id="input-api-key" class="modal-input" placeholder="e.g. gsk_... or sk-..." autocomplete="off">
+        <div class="key-status-row">
+          <span id="key-masked-display">Current: (not set)</span>
+          <button class="btn-text" id="btn-toggle-key-visibility" type="button">Show</button>
+        </div>
+        <p class="key-hint">Stored in memory for this session only — never written to disk. Use an environment variable (e.g. GROQ_API_KEY) for a persistent key.</p>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="key-modal-cancel">Cancel</button>
+        <button class="btn btn-primary" id="key-modal-save">Save Key</button>
       </div>
     </div>
   </div>
