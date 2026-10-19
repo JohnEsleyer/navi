@@ -15,6 +15,7 @@ Navi is a cost-optimized, low-latency AI harness written in Go. The core engine 
 | Command | Arguments | Description |
 |---|---|---|
 | `/help` | — | Display slash commands preview |
+| `/session` | `<sub>` | Manage saved conversations: `list`, `new`, `switch`, `rename`, `delete` |
 | `/dump` | — | Export context window to a `.txt` file in current directory |
 | `/gui` | — | Launch the aesthetic dark-mode desktop GUI |
 | `/clear` | — | Reset context window to drop token consumption |

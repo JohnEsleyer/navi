@@ -66,13 +66,14 @@ func (a *App) handleCommand(input string) *navi.Result {
 	}
 
 	if name == "" {
-		return a.localResult("Type a message, or one of: /help /key /model /baseurl /stats /history /clear /dump /exit")
+		return a.localResult("Type a message, or one of: /help /session /key /model /baseurl /stats /history /clear /dump /exit")
 	}
 
 	switch name {
 	case "help":
 		return a.localResult(
 			"/help     show this list\n" +
+				"/session  list|new|switch saved conversations\n" +
 				"/key      inspect or set API key (/key <secret>)\n" +
 				"/model    inspect or switch model (e.g. /model gpt-4o-mini)\n" +
 				"/baseurl  inspect or switch endpoint (e.g. /baseurl http://localhost:11434/v1)\n" +
@@ -128,6 +129,55 @@ func (a *App) handleCommand(input string) *navi.Result {
 	case "exit":
 		os.Exit(0)
 		return nil
+
+	case "session":
+		parts := strings.Fields(args)
+		action := "list"
+		if len(parts) > 0 {
+			action = strings.ToLower(parts[0])
+		}
+		switch action {
+		case "list":
+			sessions, _ := a.engine.ListSessions()
+			active := a.engine.ActiveSession()
+			if len(sessions) == 0 {
+				return a.localResult("No saved sessions yet.")
+			}
+			out := fmt.Sprintf("Saved sessions (%d):\n", len(sessions))
+			for _, s := range sessions {
+				marker := "  "
+				if active != nil && active.ID == s.ID {
+					marker = "> "
+				}
+				out += fmt.Sprintf("%s%s  %s\n", marker, s.ID[:min(6, len(s.ID))], s.Title)
+			}
+			return a.localResult(out)
+		case "new":
+			title := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(args), "new"))
+			sess, err := a.engine.CreateSession(title)
+			if err != nil {
+				return a.localResult("Could not create session: " + err.Error())
+			}
+			return a.localResult(fmt.Sprintf("Started new session: %s", sess.Title))
+		case "switch":
+			if len(parts) < 2 {
+				return a.localResult("Usage: /session switch <id-prefix>")
+			}
+			sessions, _ := a.engine.ListSessions()
+			for _, s := range sessions {
+				if strings.HasPrefix(s.ID, parts[1]) {
+					sess, err := a.engine.SwitchSession(s.ID)
+					if err != nil {
+						return a.localResult("Could not switch: " + err.Error())
+					}
+					return a.localResult(fmt.Sprintf("Switched to: %s (%d messages restored)",
+						sess.Title, len(a.engine.GetSessionMessages(sess.ID))))
+				}
+			}
+			return a.localResult(fmt.Sprintf("No session matches %q — try /session list", parts[1]))
+		default:
+			return a.localResult("/session <list|new|switch>")
+		}
 
 	default:
 		return a.localResult(fmt.Sprintf("Unknown command: /%s — try /help", name))
@@ -199,4 +249,79 @@ func (a *App) SetBaseURL(url string) bool {
 
 func (a *App) GetBaseURL() string {
 	return a.engine.GetBaseURL()
+}
+
+// --- Sessions & model history ---
+//
+// These are bound for the GUI's session switcher and model combobox. They
+// return plain slices/pointers rather than navi.ChatAPI, because Wails can only
+// marshal concrete JSON-serializable values across the bridge, not interfaces.
+
+// GetModelHistory returns recently used models, newest first, for the
+// combobox dropdown. An empty result is returned as an empty slice rather than
+// nil so the frontend gets [] instead of null.
+func (a *App) GetModelHistory() []string {
+	hist, err := a.engine.GetModelHistory()
+	if err != nil || len(hist) == 0 {
+		return []string{}
+	}
+	return hist
+}
+
+func (a *App) SaveModelHistory(model string) bool {
+	_ = a.engine.SaveModelHistory(model)
+	return true
+}
+
+func (a *App) DeleteModelHistory(model string) bool {
+	_ = a.engine.DeleteModelHistory(model)
+	return true
+}
+
+func (a *App) ListSessions() []*navi.Session {
+	sessions, err := a.engine.ListSessions()
+	if err != nil || sessions == nil {
+		return []*navi.Session{}
+	}
+	return sessions
+}
+
+func (a *App) GetActiveSession() *navi.Session {
+	return a.engine.ActiveSession()
+}
+
+func (a *App) CreateSession(title string) *navi.Session {
+	sess, err := a.engine.CreateSession(title)
+	if err != nil {
+		return nil
+	}
+	return sess
+}
+
+func (a *App) SwitchSession(id string) *navi.Session {
+	sess, err := a.engine.SwitchSession(id)
+	if err != nil {
+		return nil
+	}
+	return sess
+}
+
+func (a *App) DeleteSession(id string) bool {
+	_ = a.engine.DeleteSession(id)
+	return true
+}
+
+func (a *App) RenameSession(id, title string) bool {
+	return a.engine.RenameSession(id, title) == nil
+}
+
+// GetSessionMessages returns a session's stored turns so the GUI can replay a
+// conversation when it is switched to. Empty slice rather than nil, so the
+// frontend iterates safely.
+func (a *App) GetSessionMessages(id string) []navi.MessageRecord {
+	msgs := a.engine.GetSessionMessages(id)
+	if msgs == nil {
+		return []navi.MessageRecord{}
+	}
+	return msgs
 }

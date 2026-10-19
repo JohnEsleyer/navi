@@ -80,47 +80,161 @@ body { background: var(--bg-primary); color: var(--text-primary); height: 100vh;
 
 .actions { display: flex; gap: 8px; align-items: center; }
 
-/* Custom Dropdown */
-.custom-dropdown { position: relative; }
-.dropdown-trigger {
+/* --- Model combobox --- */
+/* Replaces the old fixed dropdown: the text field accepts any model name, so
+   Ollama tags and unlisted providers work without a code change. */
+.model-combobox-wrapper { position: relative; display: flex; align-items: center; }
+
+.model-input-container {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border-color);
-  color: var(--text-primary);
-  padding: 6px 12px;
   border-radius: 8px;
-  cursor: pointer;
-  display: flex;
-  gap: 8px;
-  align-items: center;
+  padding: 0 6px 0 10px;
+  transition: border-color 0.15s;
+}
+.model-input-container:focus-within { border-color: var(--accent-cyan); }
+
+.model-input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
   font-size: 12px;
   font-weight: 500;
+  font-family: inherit;
+  width: 165px;
+  padding: 6px 0;
 }
-.dropdown-trigger:hover { border-color: rgba(0, 229, 255, 0.4); }
-.dropdown-menu {
-  display: none;
+.model-input::placeholder { color: var(--text-muted); }
+
+.btn-combobox-arrow {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  border-radius: 5px;
+}
+.btn-combobox-arrow:hover { color: var(--accent-cyan); }
+.btn-combobox-arrow .chevron { transition: transform 0.18s; }
+.btn-combobox-arrow.open .chevron { transform: rotate(180deg); }
+
+.model-history-dropdown {
   position: absolute;
+  top: calc(100% + 6px);
   right: 0;
-  top: 115%;
+  width: 260px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  width: 230px;
-  z-index: 100;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.7);
+  z-index: 1000;
+  display: none;
   overflow: hidden;
 }
-.dropdown-menu.active { display: block; }
-/* The trigger precedes the menu in the DOM, so `~` cannot match it; drive the
-   rotation from the shared parent instead. */
-.custom-dropdown:has(.dropdown-menu.active) .chevron { transform: rotate(180deg); }
-.dropdown-item {
-  padding: 9px 14px;
-  font-size: 12px;
-  color: var(--text-primary);
-  cursor: pointer;
-  transition: background 0.15s;
+.model-history-dropdown.active { display: block; }
+
+.dropdown-header {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
 }
-.dropdown-item:hover { background: var(--accent-cyan); color: #000; }
+.model-list { max-height: 230px; overflow-y: auto; }
+
+.model-history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.model-history-item:hover { background: rgba(0,229,255,0.08); }
+.model-history-label { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.model-history-empty {
+  padding: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.btn-delete-item {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 7px;
+  border-radius: 5px;
+  flex-shrink: 0;
+}
+.btn-delete-item:hover { color: var(--accent-red); background: rgba(255,51,102,0.14); }
+
+/* --- Sessions modal --- */
+.sessions-modal-card { width: 520px; }
+
+.sessions-toolbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.sessions-toolbar .modal-input { flex: 1; margin-bottom: 0; }
+
+.sessions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 360px;
+  overflow-y: auto;
+  margin-bottom: 16px;
+}
+
+.session-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  transition: border-color 0.15s;
+}
+.session-row:hover { border-color: rgba(0,229,255,0.4); }
+.session-row.active { border-color: var(--accent-cyan); background: rgba(0,229,255,0.06); }
+
+.session-row-info { min-width: 0; flex: 1; }
+.session-row-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-row-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.session-row-actions .btn { padding: 5px 10px; font-size: 11px; }
 
 /* Buttons */
 .btn {

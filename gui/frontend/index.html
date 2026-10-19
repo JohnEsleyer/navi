@@ -36,9 +36,17 @@
       </div>
 
       <div class="actions">
-        <!-- Model Selection Dropdown -->
-        <div class="custom-dropdown" id="model-dropdown">
-          <button class="dropdown-trigger" id="model-trigger">
+        <!-- Sessions Switcher -->
+        <button class="btn" id="btn-sessions" title="Manage saved sessions">
+          <svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+          <span id="active-session-label">Chats</span>
+        </button>
+
+        <!-- Model combobox: type any model name, or pick one from history -->
+        <div class="model-combobox-wrapper" id="model-combobox-wrapper">
+          <div class="model-input-container">
             <!-- CPU / Model Chip Icon -->
             <svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <rect x="4" y="4" width="16" height="16" rx="2"/>
@@ -48,17 +56,18 @@
               <line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="15" x2="23" y2="15"/>
               <line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="15" x2="4" y2="15"/>
             </svg>
-            <span id="current-model">llama-3.1-8b-instant</span>
-            <!-- Chevron Down Icon -->
-            <svg class="ui-icon chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="6 9 12 15 18 9"/>
-            </svg>
-          </button>
-          <div class="dropdown-menu" id="model-menu">
-            <div class="dropdown-item" data-value="llama-3.1-8b-instant">llama-3.1-8b-instant (Groq)</div>
-            <div class="dropdown-item" data-value="gpt-4o-mini">gpt-4o-mini (OpenAI)</div>
-            <div class="dropdown-item" data-value="deepseek-chat">deepseek-chat</div>
-            <div class="dropdown-item" data-value="llama3.2:1b">llama3.2:1b (Local)</div>
+            <input type="text" id="model-input" class="model-input"
+                   placeholder="Type any model name..." autocomplete="off" spellcheck="false"
+                   value="llama-3.1-8b-instant" title="Type a model name and press Enter">
+            <button type="button" class="btn-combobox-arrow" id="model-trigger" title="Recently used models">
+              <svg class="ui-icon chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </button>
+          </div>
+          <div class="model-history-dropdown" id="model-menu">
+            <div class="dropdown-header">Recent Models</div>
+            <div id="model-list" class="model-list"></div>
           </div>
         </div>
 
@@ -137,6 +146,21 @@
         </button>
       </div>
     </footer>
+  </div>
+
+  <!-- Session Manager Modal -->
+  <div class="custom-modal-backdrop" id="sessions-modal">
+    <div class="custom-modal-card sessions-modal-card">
+      <h3>Saved Sessions</h3>
+      <div class="sessions-toolbar">
+        <input type="text" id="session-new-title" class="modal-input" placeholder="New session title..." autocomplete="off">
+        <button class="btn btn-primary" id="btn-create-session">New</button>
+      </div>
+      <div class="sessions-list" id="sessions-list"></div>
+      <div class="modal-actions">
+        <button class="btn" id="btn-close-sessions">Close</button>
+      </div>
+    </div>
   </div>
 
   <!-- Custom Alert/Confirm Modal -->

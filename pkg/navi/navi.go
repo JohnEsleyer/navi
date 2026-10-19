@@ -35,6 +35,11 @@ type Config struct {
 	Model        string
 	SystemPrompt string
 	MaxHistory   int
+
+	// DBPath selects where conversations are persisted. Empty means the
+	// default under the user config dir; ":memory:" disables persistence,
+	// which is what tests use so no shared on-disk state leaks between them.
+	DBPath string
 }
 
 type Message struct {
@@ -115,6 +120,18 @@ type Engine struct {
 	totalInput  int
 	totalOutput int
 	totalCost   float64
+
+	// store persists conversations and model history. It is set once in New
+	// and never replaced, so reads of the field itself need no lock; the
+	// backends carry their own synchronization.
+	store ChatAPI
+
+	// sessionMu guards activeSession, the only field above that can be
+	// swapped at runtime by CreateSession/SwitchSession/DeleteSession.
+	// Lock order: sessionMu may be held while taking historyMu, but never
+	// the reverse, so the two cannot deadlock.
+	sessionMu     sync.RWMutex
+	activeSession *Session
 }
 
 func New(cfg Config) *Engine {
@@ -154,7 +171,7 @@ func New(cfg Config) *Engine {
 		pKeys[provider.ID] = cfg.APIKey
 	}
 
-	return &Engine{
+	eng := &Engine{
 		cfg:           cfg,
 		customBaseURL: callerSetBaseURL,
 		providerKeys:  pKeys,
@@ -162,6 +179,31 @@ func New(cfg Config) *Engine {
 		cache:         make(map[string]string),
 		history:       []Message{{Role: "system", Content: cfg.SystemPrompt}},
 	}
+
+	// Persistence is best-effort: a missing store must degrade to a working
+	// engine rather than prevent startup, so errors are recorded as "no
+	// store" and every consumer nil-checks.
+	store, err := OpenChatStore(cfg.DBPath)
+	if err != nil || store == nil {
+		if fb, fbErr := newFallbackStore(":memory:"); fbErr == nil {
+			store = fb
+		}
+	}
+	eng.store = store
+
+	// Resume the most recently updated conversation, or start one. Ordering
+	// is by updated_at so a returning user lands where they left off.
+	if store != nil {
+		if sessions, listErr := store.ListSessions(); listErr == nil && len(sessions) > 0 {
+			eng.activeSession = sessions[0]
+			eng.loadSessionHistory(sessions[0].ID)
+		} else if sess, createErr := store.CreateSession("New Chat", cfg.Model); createErr == nil {
+			eng.activeSession = sess
+		}
+		_ = store.SaveModelHistory(cfg.Model)
+	}
+
+	return eng
 }
 
 func (e *Engine) hash(messages []Message) string {
@@ -285,6 +327,12 @@ func (e *Engine) Ask(ctx context.Context, input string) (*Result, error) {
 		(float64(outT) / 1_000_000 * pricing.OutputPer1MTokens)
 	sessionCost := e.addUsage(inT, outT, turnCost)
 
+	// Persist the completed turn. Placed here rather than at commitExchange
+	// because inT/outT/turnCost are only known once usage and pricing have
+	// been resolved. Persistence is deliberately best-effort: a write failure
+	// must never turn a successful, already-paid-for reply into an error.
+	e.persistExchange(input, reply, model, inT, outT, turnCost)
+
 	return &Result{
 		Text: reply,
 		Meta: ResponseMeta{
@@ -312,6 +360,75 @@ func (e *Engine) commitExchange(user, assistant string) {
 		pruned = append(pruned, e.history[len(e.history)-e.cfg.MaxHistory:]...)
 		e.history = pruned
 	}
+}
+
+// persistExchange writes a completed exchange to the active session. It is
+// deliberately best-effort and nil-guarded: persistence must never surface an
+// error for a reply that already succeeded and was already billed for.
+func (e *Engine) persistExchange(input, reply, model string, inT, outT int, turnCost float64) {
+	if e.store == nil {
+		return
+	}
+
+	e.sessionMu.RLock()
+	activeID := ""
+	if e.activeSession != nil {
+		activeID = e.activeSession.ID
+	}
+	e.sessionMu.RUnlock()
+
+	if activeID == "" {
+		return
+	}
+
+	// Two separate writes, so a failure on one still records the other rather
+	// than losing the whole turn.
+	_, _ = e.store.AddMessage(activeID, MessageRecord{
+		Role:         "user",
+		Content:      input,
+		PromptTokens: inT,
+	})
+	_, _ = e.store.AddMessage(activeID, MessageRecord{
+		Role:         "assistant",
+		Content:      reply,
+		OutputTokens: outT,
+		Cost:         turnCost,
+	})
+	_ = e.store.SaveModelHistory(model)
+}
+
+// loadSessionHistory rebuilds the in-memory context window from a stored
+// session, keeping the system prompt at index 0 and re-applying the sliding
+// window so the oldest turns are dropped rather than the newest.
+func (e *Engine) loadSessionHistory(sessionID string) {
+	if e.store == nil {
+		return
+	}
+	msgs, err := e.store.GetMessages(sessionID)
+	if err != nil {
+		return
+	}
+
+	// Read the config before taking historyMu rather than inside it, so the
+	// two locks are never nested in either order.
+	e.cfgMu.RLock()
+	sys := e.cfg.SystemPrompt
+	maxHist := e.cfg.MaxHistory
+	e.cfgMu.RUnlock()
+
+	history := []Message{{Role: "system", Content: sys}}
+	for _, m := range msgs {
+		history = append(history, Message{Role: m.Role, Content: m.Content})
+	}
+	if len(history) > maxHist+1 {
+		pruned := []Message{history[0]}
+		pruned = append(pruned, history[len(history)-maxHist:]...)
+		history = pruned
+	}
+
+	e.historyMu.Lock()
+	e.history = history
+	e.historyMu.Unlock()
 }
 
 func (e *Engine) model() string {
@@ -415,7 +532,7 @@ func (e *Engine) DumpContext() (string, error) {
 
 	var buf bytes.Buffer
 	buf.WriteString("=====================================================\n")
-	buf.WriteString(fmt.Sprintf("🧚 NAVI CONTEXT DUMP - %s\n", time.Now().Format(time.RFC1123)))
+	buf.WriteString(fmt.Sprintf("NAVI CONTEXT DUMP - %s\n", time.Now().Format(time.RFC1123)))
 	buf.WriteString(fmt.Sprintf("Model:        %s\n", model))
 	buf.WriteString(fmt.Sprintf("Endpoint:     %s\n", baseURL))
 	buf.WriteString(fmt.Sprintf("API Key:      %s\n", e.MaskedAPIKey()))

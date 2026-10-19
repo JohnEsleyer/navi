@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 
 	"navi/pkg/navi"
 )
@@ -42,6 +44,113 @@ func registerCommands() {
 		Description: "Display available slash commands and usage",
 		Execute: func(engine *navi.Engine, args string) bool {
 			printCommandPreview("")
+			return false
+		},
+	}
+
+	commandRegistry["session"] = SlashCommand{
+		Name:        "/session",
+		Args:        "<sub>",
+		Description: "Saved conversations: list|new|switch|rename|delete",
+		Execute: func(engine *navi.Engine, args string) bool {
+			parts := strings.Fields(args)
+			action := "list"
+			if len(parts) > 0 {
+				action = strings.ToLower(parts[0])
+			}
+
+			switch action {
+			case "list":
+				sessions, err := engine.ListSessions()
+				if err != nil {
+					fmt.Printf("%sError listing sessions: %v%s\n", ColorRed, err, ColorReset)
+					return false
+				}
+				active := engine.ActiveSession()
+				fmt.Printf("\n%sSaved sessions (%d):%s\n", ColorBold, len(sessions), ColorReset)
+				for _, s := range sessions {
+					marker := "  "
+					title := s.Title
+					if active != nil && active.ID == s.ID {
+						marker = "▶ "
+						title = ColorBold + title + ColorReset
+					}
+					fmt.Printf("%s%s %s%s%s  %s %s[%s]%s\n",
+						ColorGray, marker, ColorCyan, shortID(s.ID), ColorReset,
+						title, ColorDim, s.Model, ColorReset)
+				}
+				fmt.Printf("%sUse /session switch <id> to change session.%s\n", ColorDim, ColorReset)
+				return false
+
+			case "new":
+				title := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(args), "new"))
+				sess, err := engine.CreateSession(title)
+				if err != nil {
+					fmt.Printf("%sError creating session: %v%s\n", ColorRed, err, ColorReset)
+					return false
+				}
+				fmt.Printf("%s✔ New session %s — %s [%s]%s\n",
+					ColorGreen, shortID(sess.ID), sess.Title, sess.Model, ColorReset)
+				return false
+
+			case "switch":
+				if len(parts) < 2 {
+					fmt.Printf("%sUsage: /session switch <id-prefix>%s\n", ColorYellow, ColorReset)
+					return false
+				}
+				target, found := findSessionByPrefix(engine, parts[1])
+				if !found {
+					fmt.Printf("%sNo session matches %q. Run /session list.%s\n", ColorRed, parts[1], ColorReset)
+					return false
+				}
+				sess, err := engine.SwitchSession(target)
+				if err != nil {
+					fmt.Printf("%sError switching session: %v%s\n", ColorRed, err, ColorReset)
+					return false
+				}
+				msgs := engine.GetSessionMessages(sess.ID)
+				fmt.Printf("%s✔ Switched to %s — %s (%d messages restored)%s\n",
+					ColorGreen, shortID(sess.ID), sess.Title, len(msgs), ColorReset)
+				return false
+
+			case "rename":
+				active := engine.ActiveSession()
+				if active == nil {
+					return false
+				}
+				newTitle := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(args), "rename"))
+				if newTitle == "" {
+					fmt.Printf("%sUsage: /session rename <new title>%s\n", ColorYellow, ColorReset)
+					return false
+				}
+				if err := engine.RenameSession(active.ID, newTitle); err != nil {
+					fmt.Printf("%sError renaming session: %v%s\n", ColorRed, err, ColorReset)
+					return false
+				}
+				fmt.Printf("%s✔ Renamed session %s to %q%s\n", ColorGreen, shortID(active.ID), newTitle, ColorReset)
+				return false
+
+			case "delete":
+				if len(parts) < 2 {
+					fmt.Printf("%sUsage: /session delete <id-prefix>%s\n", ColorYellow, ColorReset)
+					return false
+				}
+				target, found := findSessionByPrefix(engine, parts[1])
+				if !found {
+					fmt.Printf("%sNo session matches %q. Run /session list.%s\n", ColorRed, parts[1], ColorReset)
+					return false
+				}
+				if err := engine.DeleteSession(target); err != nil {
+					fmt.Printf("%sError deleting session: %v%s\n", ColorRed, err, ColorReset)
+					return false
+				}
+				fmt.Printf("%s✔ Deleted session %s%s\n", ColorGreen, shortID(target), ColorReset)
+				return false
+
+			default:
+				fmt.Printf("%sUnknown subcommand %q. Use: /session <list|new|switch|rename|delete>%s\n",
+					ColorYellow, action, ColorReset)
+			}
 			return false
 		},
 	}
@@ -186,8 +295,21 @@ func registerCommands() {
 	}
 }
 
+// printCommandPreview renders the command table. The border width is computed
+// from the row layout rather than hard-coded, so the box cannot go ragged when
+// a column width changes: previously the rows were 65 cells wide inside a
+// 62-cell border.
 func printCommandPreview(filter string) {
-	fmt.Printf("\n%s┌── Slash Commands ──────────────────────────────────────────┐%s\n", ColorPurple, ColorReset)
+	const sigW = 18
+	const descW = 41
+	// │  <sig> <desc> │  -> 1 + 2 + sigW + 1 + descW + 1 + 1
+	inner := 2 + sigW + 1 + descW + 1
+
+	// The ─ glyph is 3 bytes in UTF-8, so len() would over-count it and emit
+	// 4 too few dashes; count runes instead.
+	const title = "── Slash Commands "
+	fmt.Printf("\n%s┌%s%s┐%s\n",
+		ColorPurple, title, strings.Repeat("─", inner-utf8.RuneCountInString(title)), ColorReset)
 
 	var keys []string
 	for k := range commandRegistry {
@@ -200,14 +322,143 @@ func printCommandPreview(filter string) {
 		if filter != "" && !strings.HasPrefix(cmd.Name, filter) {
 			continue
 		}
-		cmdSignature := fmt.Sprintf("%s %s", cmd.Name, cmd.Args)
-		fmt.Printf("%s│%s  %s%-18s%s %-41s %s│%s\n",
+		cmdSignature := fit(fmt.Sprintf("%s %s", cmd.Name, cmd.Args), sigW)
+		// Truncate to the column widths so a long entry cannot push past the
+		// right-hand border and leave a ragged box.
+		fmt.Printf("%s│%s  %s%-*s%s %-*s %s│%s\n",
 			ColorPurple, ColorReset,
-			ColorBold, cmdSignature, ColorReset,
-			cmd.Description,
+			ColorBold, sigW, cmdSignature, ColorReset,
+			descW, fit(cmd.Description, descW),
 			ColorPurple, ColorReset)
 	}
-	fmt.Printf("%s└────────────────────────────────────────────────────────────┘%s\n", ColorPurple, ColorReset)
+	fmt.Printf("%s└%s┘%s\n", ColorPurple, strings.Repeat("─", inner), ColorReset)
+}
+
+// fit truncates s to at most n display cells, marking elision with an
+// ellipsis. It keeps fixed-width tables (like the command box) from acquiring
+// a ragged edge when a label is longer than its column.
+func fit(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	if n <= 1 {
+		return string(r[:n])
+	}
+	return string(r[:n-1]) + "…"
+}
+
+// shortID returns a display-safe prefix. It guards the length instead of
+// slicing blindly so a malformed or externally-created ID cannot panic the UI.
+func shortID(id string) string {
+	if len(id) > 6 {
+		return id[:6]
+	}
+	return id
+}
+
+// findSessionByPrefix resolves a user-typed ID prefix to a full session ID.
+// An ambiguous prefix matches nothing rather than guessing, so a /session
+// switch or delete can never act on the wrong conversation.
+func findSessionByPrefix(engine *navi.Engine, prefix string) (string, bool) {
+	sessions, err := engine.ListSessions()
+	if err != nil {
+		return "", false
+	}
+	var found string
+	matches := 0
+	for _, s := range sessions {
+		if strings.HasPrefix(s.ID, prefix) {
+			found = s.ID
+			matches++
+		}
+	}
+	if matches != 1 {
+		return "", false
+	}
+	return found, true
+}
+
+// isTerminal reports whether f is an interactive terminal. Output niceties
+// (spinner, typewriter) are suppressed otherwise, so piping navi output into a
+// file or another program yields clean text with no ANSI escapes or CR noise.
+func isTerminal(f *os.File) bool {
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
+
+// runSpinner starts a Braille spinner showing elapsed seconds and returns a
+// stop function. stop is idempotent, so calling it twice cannot panic, and it
+// always clears the line so the spinner never collides with the reply.
+func runSpinner(label string) func() {
+	if !isTerminal(os.Stdout) {
+		return func() {}
+	}
+
+	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	done := make(chan struct{})
+	start := time.Now()
+
+	go func() {
+		ticker := time.NewTicker(80 * time.Millisecond)
+		defer ticker.Stop()
+		for i := 0; ; i++ {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				elapsed := time.Since(start).Seconds()
+				fmt.Printf("\r%s%s%s %s%s %.1fs%s\033[K",
+					ColorCyan, frames[i%len(frames)], ColorReset,
+					ColorDim, label, elapsed, ColorReset)
+			}
+		}
+	}()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			close(done)
+			fmt.Print("\r\033[K")
+		})
+	}
+}
+
+// renderTypewriter streams a response word by word for a "live" feel. The
+// per-word delay shrinks as the answer grows so a long reply is never delayed
+// by more than ~1.5s total, and non-terminal output is written whole.
+func renderTypewriter(text string) {
+	if !isTerminal(os.Stdout) {
+		fmt.Println(text)
+		return
+	}
+
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		fmt.Println()
+		return
+	}
+
+	const maxTotal = 1500 * time.Millisecond
+	delay := 12 * time.Millisecond
+	if total := time.Duration(len(words)) * delay; total > maxTotal {
+		delay = maxTotal / time.Duration(len(words))
+	}
+
+	for i, w := range words {
+		fmt.Print(w)
+		if i < len(words)-1 {
+			fmt.Print(" ")
+		}
+		time.Sleep(delay)
+	}
+	fmt.Println()
 }
 
 // launchGUI starts the desktop interface, preferring a prebuilt binary over
@@ -337,8 +588,15 @@ func main() {
 		Model:      model,
 		MaxHistory: 6,
 	})
+	// Flush the chat store on exit so the last turn is never lost.
+	defer func() { _ = engine.Close() }()
 
-	printHeader(engine.GetStats().Model, engine.GetBaseURL())
+	sessionTitle := "New Chat"
+	if active := engine.ActiveSession(); active != nil && strings.TrimSpace(active.Title) != "" {
+		sessionTitle = active.Title
+	}
+
+	printHeader(engine.GetStats().Model, engine.GetBaseURL(), sessionTitle)
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
@@ -379,18 +637,21 @@ func main() {
 			continue
 		}
 
-		fmt.Printf("%sThinking...%s\r", ColorDim, ColorReset)
+		// Braille spinner + elapsed time while the request is in flight. It
+		// self-suppresses when stdout is piped, so redirected output stays clean.
+		stop := runSpinner("thinking")
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		res, err := engine.Ask(ctx, input)
 		cancel()
+		stop()
 
-		fmt.Print("\r\033[K")
 		if err != nil {
 			fmt.Printf("%sError: %v%s\n", ColorRed, err, ColorReset)
 			continue
 		}
 
-		fmt.Printf("%s%snavi ›%s %s\n", ColorBold, ColorCyan, ColorReset, res.Text)
+		fmt.Printf("%s%snavi ›%s ", ColorBold, ColorCyan, ColorReset)
+		renderTypewriter(res.Text)
 		if res.Meta.Cached {
 			fmt.Printf("%s⚡ [CACHE HIT] $0.000000 | Session: $%.6f | %v%s\n",
 				ColorYellow, res.Meta.SessionCost, res.Meta.Duration.Round(time.Millisecond), ColorReset)
@@ -401,12 +662,25 @@ func main() {
 	}
 }
 
-func printHeader(model, endpoint string) {
-	fmt.Printf("%s┌────────────────────────────────────────────────────────┐%s\n", ColorCyan, ColorReset)
-	fmt.Printf("%s│                 🧚 NAVI AI HARNESS                     │%s\n", ColorCyan, ColorReset)
-	fmt.Printf("%s│%s   Model:    %-42s %s│%s\n", ColorCyan, ColorDim, model, ColorCyan, ColorReset)
-	fmt.Printf("%s│%s   Endpoint: %-42s %s│%s\n", ColorCyan, ColorDim, endpoint, ColorCyan, ColorReset)
-	fmt.Printf("%s│%s   Type %s/%s to see commands (/gui, /dump, /model, etc.)   %s│%s\n",
-		ColorCyan, ColorYellow, ColorBold, ColorReset+ColorDim, ColorCyan, ColorReset)
-	fmt.Printf("%s└────────────────────────────────────────────────────────┘%s\n", ColorCyan, ColorReset)
+// printHeader renders the startup banner. The session name is shown because a
+// resumed conversation should be visible before the first prompt.
+//
+// Every interior row is padded to a fixed 56 cells so the right-hand border
+// lines up regardless of how long a value is; the same was not true when the
+// rows were formatted ad hoc, which left the "Type /" line one cell wider.
+func printHeader(model, endpoint, sessionTitle string) {
+	const inner = 56
+	row := func(text string) {
+		fmt.Printf("%s│%s%-*s%s│%s\n", ColorCyan, ColorDim, inner, text, ColorCyan, ColorReset)
+	}
+
+	fmt.Printf("%s┌%s┐%s\n", ColorCyan, strings.Repeat("─", inner), ColorReset)
+	row("              NAVI AI HARNESS              ")
+	row("   Session:  " + fit(sessionTitle, 42))
+	row("   Model:    " + fit(model, 42))
+	row("   Endpoint: " + fit(endpoint, 42))
+	// No inline color here: the row helper pads with %-*s, and escape bytes
+	// count toward that width, which would silently shrink the visible row.
+	row("   Type / for commands (/session, /gui, /model, etc.)")
+	fmt.Printf("%s└%s┘%s\n", ColorCyan, strings.Repeat("─", inner), ColorReset)
 }
