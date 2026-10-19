@@ -342,6 +342,40 @@ else
   step "gui:      no"
 fi
 
+# A successful compile is not evidence that a GUI binary works. Wails keeps
+# the real app behind build tags, so a binary built without -tags production
+# links cleanly, reports success, and then prints "Wails applications will
+# not build without the correct build tags" the moment it is launched.
+# Compiling proves nothing here - only starting it does.
+#
+# Returns 0 if the app is alive after the grace period, 1 if it exited early,
+# 2 if it could not be tested (no display available).
+gui_launches() {
+  local bin="$1" pid
+
+  # Without a display the app cannot start at all, so a failure here would
+  # say nothing about the binary. Skip rather than produce a false negative
+  # on a headless host (CI, ssh, container).
+  [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || return 2
+
+  "$bin" >/dev/null 2>&1 &
+  pid=$!
+
+  # A broken build exits in a fraction of a second; a healthy one stays
+  # resident and keeps running until killed. Checking liveness rather than
+  # `timeout`'s exit code avoids a false failure when the app shuts down
+  # cleanly on SIGTERM instead of being killed.
+  sleep 3
+
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null
+    wait "$pid" 2>/dev/null
+    return 0
+  fi
+  wait "$pid" 2>/dev/null
+  return 1
+}
+
 # ---------------------------------------------------------------- build ----
 
 WORKDIR="$(mktemp -d)"
@@ -362,8 +396,35 @@ if [ "$WANT_GUI" -eq 1 ]; then
   # tags." The binary still links and the build looks successful - the failure
   # surfaces only at launch, which makes a missing tag easy to miss.
   if GOFLAGS="-trimpath" go build -tags production -o "$WORKDIR/$GUI_NAME" ./cmd/navi-gui 2>"$WORKDIR/gui-build.log"; then
-    BUILT_GUI=1
     step "ok: $WORKDIR/$GUI_NAME"
+
+    # Compiling is not the same as running. Verify it actually starts, so a
+    # binary that links but dies on launch is dropped here rather than
+    # installed and left to fail when the user first types /gui.
+    if [ "${NAVI_SKIP_LAUNCH_CHECK:-0}" = "1" ]; then
+      step "launch:   skipped (NAVI_SKIP_LAUNCH_CHECK=1)"
+      BUILT_GUI=1
+    else
+      case "$(gui_launches "$WORKDIR/$GUI_NAME"; echo $?)" in
+        0)
+          step "launch:   ok (started and stayed resident)"
+          BUILT_GUI=1
+          ;;
+        2)
+          step "launch:   skipped (no display, not verified)"
+          BUILT_GUI=1
+          ;;
+        *)
+          warn "GUI built but does not start - installing the CLI only."
+          warn "A GUI that compiles yet dies on launch usually means the Wails"
+          warn "build tag is missing. Rebuild with: go build -tags production"
+          if [ "${NAVI_DEBUG:-0}" = "1" ]; then
+            printf '%s\n' "--- gui build log ---"
+            cat "$WORKDIR/gui-build.log"
+          fi
+          ;;
+      esac
+    fi
   else
     warn "GUI build failed - installing the CLI only."
     warn "The GUI needs cgo plus GTK/WebKit headers. On Debian/Ubuntu:"
