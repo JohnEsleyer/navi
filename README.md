@@ -4,9 +4,7 @@
   <img src="assets/navi-icon.svg" width="80" height="80" alt="Navi — The Wayfinder Spark">
 </p>
 
-# 🧚 Navi
-
-> *"Hey! Listen!"*
+# Navi
 
 Navi is a cost-optimized, low-latency AI harness written in Go. The core engine (`pkg/navi`) uses only the standard library; the optional desktop GUI is built with Wails. It works across Groq, DeepSeek, OpenAI, or local Ollama instances.
 
