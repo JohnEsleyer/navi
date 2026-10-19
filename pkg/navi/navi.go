@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -41,17 +43,17 @@ type Message struct {
 }
 
 type ResponseMeta struct {
-	Cached       bool
-	PromptTokens int
-	OutputTokens int
-	TurnCost     float64
-	SessionCost  float64
-	Duration     time.Duration
+	Cached       bool          `json:"cached"`
+	PromptTokens int           `json:"prompt_tokens"`
+	OutputTokens int           `json:"output_tokens"`
+	TurnCost     float64       `json:"turn_cost"`
+	SessionCost  float64       `json:"session_cost"`
+	Duration     time.Duration `json:"duration"`
 }
 
 type Result struct {
-	Text string
-	Meta ResponseMeta
+	Text string       `json:"text"`
+	Meta ResponseMeta `json:"meta"`
 }
 
 type chatRequest struct {
@@ -74,21 +76,28 @@ type chatResponse struct {
 }
 
 type Stats struct {
-	Model        string
-	InputTokens  int
-	OutputTokens int
-	TotalCost    float64
-	CacheEntries int
-	HistoryDepth int
+	Model        string  `json:"model"`
+	InputTokens  int     `json:"input_tokens"`
+	OutputTokens int     `json:"output_tokens"`
+	TotalCost    float64 `json:"total_cost"`
+	CacheEntries int     `json:"cache_entries"`
+	HistoryDepth int     `json:"history_depth"`
 }
 
 type Engine struct {
-	cfg         Config
-	client      *http.Client
-	cacheMu     sync.RWMutex
-	cache       map[string]string
-	historyMu   sync.RWMutex
-	history     []Message
+	cfg    Config
+	cfgMu  sync.RWMutex // guards cfg.Model, the only mutable field
+	client *http.Client
+
+	cacheMu sync.RWMutex
+	cache   map[string]string
+
+	historyMu sync.RWMutex
+	history   []Message
+
+	// statsMu guards the session counters. They used to be read and written
+	// with no lock at all, which raced with GetStats/TotalCost/DumpContext.
+	statsMu     sync.RWMutex
 	totalInput  int
 	totalOutput int
 	totalCost   float64
@@ -121,18 +130,21 @@ func (e *Engine) Ask(ctx context.Context, input string) (*Result, error) {
 	start := time.Now()
 
 	e.historyMu.Lock()
-	e.history = append(e.history, Message{Role: "user", Content: input})
-
-	// Sliding window
-	if len(e.history) > e.cfg.MaxHistory+1 {
-		pruned := []Message{e.history[0]}
-		pruned = append(pruned, e.history[len(e.history)-e.cfg.MaxHistory:]...)
-		e.history = pruned
+	// Build the request payload without committing the user message to shared
+	// history yet. If the call fails we must not leave a dangling user turn
+	// behind, otherwise the next call resends an orphaned prompt.
+	prospective := make([]Message, 0, len(e.history)+1)
+	prospective = append(prospective, e.history...)
+	prospective = append(prospective, Message{Role: "user", Content: input})
+	if len(prospective) > e.cfg.MaxHistory+1 {
+		pruned := []Message{prospective[0]}
+		pruned = append(pruned, prospective[len(prospective)-e.cfg.MaxHistory:]...)
+		prospective = pruned
 	}
-
-	currentHistory := make([]Message, len(e.history))
-	copy(currentHistory, e.history)
 	e.historyMu.Unlock()
+
+	currentHistory := make([]Message, len(prospective))
+	copy(currentHistory, prospective)
 
 	key := e.hash(currentHistory)
 
@@ -142,22 +154,22 @@ func (e *Engine) Ask(ctx context.Context, input string) (*Result, error) {
 	e.cacheMu.RUnlock()
 
 	if found {
-		e.historyMu.Lock()
-		e.history = append(e.history, Message{Role: "assistant", Content: cachedReply})
-		e.historyMu.Unlock()
+		e.commitExchange(input, cachedReply)
 
 		return &Result{
 			Text: cachedReply,
 			Meta: ResponseMeta{
 				Cached:      true,
-				SessionCost: e.totalCost,
+				SessionCost: e.sessionCost(),
 				Duration:    time.Since(start),
 			},
 		}, nil
 	}
 
+	model := e.model()
+
 	bodyBytes, err := json.Marshal(chatRequest{
-		Model:       e.cfg.Model,
+		Model:       model,
 		Messages:    currentHistory,
 		Temperature: 0.3,
 	})
@@ -167,7 +179,7 @@ func (e *Engine) Ask(ctx context.Context, input string) (*Result, error) {
 
 	req, err := http.NewRequestWithContext(ctx, "POST", e.cfg.BaseURL+"/chat/completions", bytes.NewBuffer(bodyBytes))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("build request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -205,30 +217,23 @@ func (e *Engine) Ask(ctx context.Context, input string) (*Result, error) {
 
 	reply := parsed.Choices[0].Message.Content
 
-	e.historyMu.Lock()
-	e.history = append(e.history, Message{Role: "assistant", Content: reply})
-	e.historyMu.Unlock()
+	e.commitExchange(input, reply)
 
 	e.cacheMu.Lock()
 	e.cache[key] = reply
-	cacheCount := len(e.cache)
 	e.cacheMu.Unlock()
 
 	inT := parsed.Usage.PromptTokens
 	outT := parsed.Usage.CompletionTokens
-	e.totalInput += inT
-	e.totalOutput += outT
 
-	pricing, exists := DefaultPricing[e.cfg.Model]
+	pricing, exists := DefaultPricing[model]
 	if !exists {
 		pricing = DefaultPricing["gpt-4o-mini"]
 	}
 
 	turnCost := (float64(inT) / 1_000_000 * pricing.InputPer1MTokens) +
 		(float64(outT) / 1_000_000 * pricing.OutputPer1MTokens)
-	e.totalCost += turnCost
-
-	_ = cacheCount
+	sessionCost := e.addUsage(inT, outT, turnCost)
 
 	return &Result{
 		Text: reply,
@@ -237,10 +242,111 @@ func (e *Engine) Ask(ctx context.Context, input string) (*Result, error) {
 			PromptTokens: inT,
 			OutputTokens: outT,
 			TurnCost:     turnCost,
-			SessionCost:  e.totalCost,
+			SessionCost:  sessionCost,
 			Duration:     time.Since(start),
 		},
 	}, nil
+}
+
+// commitExchange appends a completed user/assistant pair to history in one
+// critical section, then re-applies the sliding window.
+func (e *Engine) commitExchange(user, assistant string) {
+	e.historyMu.Lock()
+	defer e.historyMu.Unlock()
+	e.history = append(e.history,
+		Message{Role: "user", Content: user},
+		Message{Role: "assistant", Content: assistant},
+	)
+	if len(e.history) > e.cfg.MaxHistory+1 {
+		pruned := []Message{e.history[0]}
+		pruned = append(pruned, e.history[len(e.history)-e.cfg.MaxHistory:]...)
+		e.history = pruned
+	}
+}
+
+func (e *Engine) model() string {
+	e.cfgMu.RLock()
+	defer e.cfgMu.RUnlock()
+	return e.cfg.Model
+}
+
+func (e *Engine) sessionCost() float64 {
+	e.statsMu.RLock()
+	defer e.statsMu.RUnlock()
+	return e.totalCost
+}
+
+// addUsage folds a turn's token counts and cost into the session totals and
+// returns the resulting session cost.
+func (e *Engine) addUsage(in, out int, cost float64) float64 {
+	e.statsMu.Lock()
+	defer e.statsMu.Unlock()
+	e.totalInput += in
+	e.totalOutput += out
+	e.totalCost += cost
+	return e.totalCost
+}
+
+// InjectAssistantMessage manually adds an assistant message without calling LLM
+func (e *Engine) InjectAssistantMessage(content string) {
+	e.historyMu.Lock()
+	defer e.historyMu.Unlock()
+	e.history = append(e.history, Message{Role: "assistant", Content: content})
+}
+
+// DumpContext writes the entire current sliding window to a local .txt file
+func (e *Engine) DumpContext() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+
+	filename := fmt.Sprintf("navi_dump_%s.txt", time.Now().Format("20060102_150405"))
+	fullPath := filepath.Join(cwd, filename)
+
+	in, out, cost := e.usageSnapshot()
+	model := e.model()
+
+	e.historyMu.RLock()
+	defer e.historyMu.RUnlock()
+
+	var buf bytes.Buffer
+	buf.WriteString("=====================================================\n")
+	buf.WriteString(fmt.Sprintf("🧚 NAVI CONTEXT DUMP - %s\n", time.Now().Format(time.RFC1123)))
+	buf.WriteString(fmt.Sprintf("Model:        %s\n", model))
+	buf.WriteString(fmt.Sprintf("Endpoint:     %s\n", e.cfg.BaseURL))
+	buf.WriteString(fmt.Sprintf("Session Cost: $%.6f\n", cost))
+	buf.WriteString(fmt.Sprintf("Tokens In/Out: %d / %d\n", in, out))
+	buf.WriteString("=====================================================\n\n")
+
+	for i, msg := range e.history {
+		buf.WriteString(fmt.Sprintf("[%d] %s:\n", i, strings.ToUpper(msg.Role)))
+		buf.WriteString(msg.Content)
+		buf.WriteString("\n-----------------------------------------------------\n")
+	}
+
+	if err := os.WriteFile(fullPath, buf.Bytes(), 0644); err != nil {
+		return "", err
+	}
+
+	return fullPath, nil
+}
+
+// usageSnapshot returns a consistent read of the session token counters.
+func (e *Engine) usageSnapshot() (in, out int, cost float64) {
+	e.statsMu.RLock()
+	defer e.statsMu.RUnlock()
+	return e.totalInput, e.totalOutput, e.totalCost
+}
+
+func (e *Engine) GetContextText() string {
+	e.historyMu.RLock()
+	defer e.historyMu.RUnlock()
+	var b strings.Builder
+	for _, m := range e.history {
+		b.WriteString(fmt.Sprintf("[%s]\n%s\n\n", strings.ToUpper(m.Role), m.Content))
+	}
+	return b.String()
 }
 
 func (e *Engine) ResetHistory() {
@@ -255,17 +361,15 @@ func (e *Engine) ClearCache() {
 	e.cache = make(map[string]string)
 }
 
+// SetModel switches the active model. It also clears the response cache,
+// because the cache key is a hash of the message list only and carries no
+// model identity — without this, switching models keeps serving the previous
+// model's cached replies.
 func (e *Engine) SetModel(model string) {
+	e.cfgMu.Lock()
 	e.cfg.Model = strings.TrimSpace(model)
-}
-
-func (e *Engine) SetSystemPrompt(prompt string) {
-	e.cfg.SystemPrompt = prompt
-	e.ResetHistory()
-}
-
-func (e *Engine) TotalCost() float64 {
-	return e.totalCost
+	e.cfgMu.Unlock()
+	e.ClearCache()
 }
 
 func (e *Engine) GetStats() Stats {
@@ -277,11 +381,13 @@ func (e *Engine) GetStats() Stats {
 	hDepth := len(e.history)
 	e.historyMu.RUnlock()
 
+	in, out, cost := e.usageSnapshot()
+
 	return Stats{
-		Model:        e.cfg.Model,
-		InputTokens:  e.totalInput,
-		OutputTokens: e.totalOutput,
-		TotalCost:    e.totalCost,
+		Model:        e.model(),
+		InputTokens:  in,
+		OutputTokens: out,
+		TotalCost:    cost,
 		CacheEntries: cCount,
 		HistoryDepth: hDepth,
 	}
@@ -293,4 +399,8 @@ func (e *Engine) GetHistory() []Message {
 	out := make([]Message, len(e.history))
 	copy(out, e.history)
 	return out
+}
+
+func (e *Engine) TotalCost() float64 {
+	return e.sessionCost()
 }

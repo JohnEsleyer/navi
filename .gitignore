@@ -1,5 +1,10 @@
 /navi
+/navi-gui
+build/
 *.exe
 *.test
 *.out
 .env
+navi_dump_*.txt
+
+codebase.txt

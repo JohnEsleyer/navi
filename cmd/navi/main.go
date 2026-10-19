@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -12,7 +14,6 @@ import (
 	"navi/pkg/navi"
 )
 
-// ANSI Styling
 const (
 	ColorReset  = "\033[0m"
 	ColorBold   = "\033[1m"
@@ -29,7 +30,7 @@ type SlashCommand struct {
 	Name        string
 	Args        string
 	Description string
-	Execute     func(engine *navi.Engine, args string) bool // returns true to exit program
+	Execute     func(engine *navi.Engine, args string) bool
 }
 
 var commandRegistry = map[string]SlashCommand{}
@@ -41,6 +42,32 @@ func registerCommands() {
 		Description: "Display available slash commands and usage",
 		Execute: func(engine *navi.Engine, args string) bool {
 			printCommandPreview("")
+			return false
+		},
+	}
+
+	commandRegistry["dump"] = SlashCommand{
+		Name:        "/dump",
+		Args:        "",
+		Description: "Export active session context into a local .txt file",
+		Execute: func(engine *navi.Engine, args string) bool {
+			path, err := engine.DumpContext()
+			if err != nil {
+				fmt.Printf("%sError dumping context: %v%s\n", ColorRed, err, ColorReset)
+				return false
+			}
+			fmt.Printf("%s✔ Context dumped to current working directory:%s\n  %s%s%s\n",
+				ColorGreen, ColorReset, ColorCyan, path, ColorReset)
+			return false
+		},
+	}
+
+	commandRegistry["gui"] = SlashCommand{
+		Name:        "/gui",
+		Args:        "",
+		Description: "Launch the standalone dark-mode Wails desktop interface",
+		Execute: func(engine *navi.Engine, args string) bool {
+			launchGUI(engine)
 			return false
 		},
 	}
@@ -89,17 +116,6 @@ func registerCommands() {
 		},
 	}
 
-	commandRegistry["clearcache"] = SlashCommand{
-		Name:        "/clearcache",
-		Args:        "",
-		Description: "Flush in-memory duplicate prompt cache",
-		Execute: func(engine *navi.Engine, args string) bool {
-			engine.ClearCache()
-			fmt.Printf("%s✔ Local response cache purged.%s\n", ColorGreen, ColorReset)
-			return false
-		},
-	}
-
 	commandRegistry["history"] = SlashCommand{
 		Name:        "/history",
 		Args:        "",
@@ -137,7 +153,6 @@ func registerCommands() {
 func printCommandPreview(filter string) {
 	fmt.Printf("\n%s┌── Slash Commands ──────────────────────────────────────────┐%s\n", ColorPurple, ColorReset)
 
-	// Sort commands alphabetically
 	var keys []string
 	for k := range commandRegistry {
 		keys = append(keys, k)
@@ -157,6 +172,107 @@ func printCommandPreview(filter string) {
 			ColorPurple, ColorReset)
 	}
 	fmt.Printf("%s└────────────────────────────────────────────────────────────┘%s\n", ColorPurple, ColorReset)
+}
+
+// launchGUI starts the desktop interface, preferring a prebuilt binary over
+// `go run`. It resolves paths independently of the caller's working directory,
+// reaps the child, and reports launch failures instead of swallowing them.
+func launchGUI(engine *navi.Engine) {
+	cmd, how := guiCommand(engine)
+
+	// Hand the GUI the model currently active in this session, so a /model
+	// switch here isn't silently lost. Existing env vars are preserved.
+	cmd.Env = append(os.Environ(), "NAVI_MODEL="+engine.GetStats().Model)
+
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Start(); err != nil {
+		fmt.Printf("%s✖ Failed to launch GUI (%s): %v%s\n", ColorRed, how, err, ColorReset)
+		return
+	}
+
+	fmt.Printf("%s✔ GUI launching via %s (pid %d)%s\n", ColorGreen, how, cmd.Process.Pid, ColorReset)
+
+	// Reap in the background so the child never becomes a zombie, and surface
+	// a late failure (e.g. `go run` failing to find go.mod) to the user.
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			fmt.Printf("%s✖ GUI exited with error: %v%s\n", ColorRed, err, ColorReset)
+		}
+	}()
+}
+
+// guiCommand picks how to start the GUI: a prebuilt binary if one exists,
+// otherwise `go run` against a located module root.
+func guiCommand(engine *navi.Engine) (*exec.Cmd, string) {
+	if path, ok := findGUIBinary(); ok {
+		return exec.Command(path), path
+	}
+
+	root, err := findModuleRoot()
+	if err != nil {
+		// Still return a go run command; its failure is reported by the caller.
+		fmt.Printf("%s⚠ No navi-gui binary found and module root unresolved (%v); trying current directory.%s\n",
+			ColorYellow, err, ColorReset)
+	} else {
+		cmd := exec.Command("go", "run", "-tags", "production", "./cmd/navi-gui")
+		cmd.Dir = root
+		return cmd, "go run @ " + root
+	}
+
+	return exec.Command("go", "run", "-tags", "production", "./cmd/navi-gui"), "go run @ ."
+}
+
+// findGUIBinary looks for a prebuilt navi-gui next to the running executable
+// and then on PATH, so an installed user doesn't need the Go toolchain.
+func findGUIBinary() (string, bool) {
+	if exe, err := os.Executable(); err == nil {
+		candidate := filepath.Join(filepath.Dir(exe), "navi-gui")
+		if isExecutable(candidate) {
+			return candidate, true
+		}
+	}
+	if path, err := exec.LookPath("navi-gui"); err == nil {
+		return path, true
+	}
+	return "", false
+}
+
+func isExecutable(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir() && info.Mode()&0111 != 0
+}
+
+// findModuleRoot walks up from the executable's directory (then the working
+// directory) looking for go.mod, so `go run` works regardless of where the
+// user invoked the CLI from.
+func findModuleRoot() (string, error) {
+	if exe, err := os.Executable(); err == nil {
+		if root, ok := walkForGoMod(filepath.Dir(exe)); ok {
+			return root, nil
+		}
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		if root, ok := walkForGoMod(cwd); ok {
+			return root, nil
+		}
+	}
+	return "", fmt.Errorf("no go.mod found above the executable or working directory")
+}
+
+func walkForGoMod(start string) (string, bool) {
+	dir := start
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
 }
 
 func main() {
@@ -194,97 +310,61 @@ func main() {
 			continue
 		}
 
-		// Handle Slash Commands
 		if strings.HasPrefix(input, "/") {
-			shouldExit := handleSlashCommand(engine, input)
-			if shouldExit {
-				printFooter(engine.TotalCost())
-				break
+			cleanInput := strings.TrimPrefix(input, "/")
+			parts := strings.SplitN(cleanInput, " ", 2)
+			cmdKey := strings.ToLower(parts[0])
+			args := ""
+			if len(parts) > 1 {
+				args = strings.TrimSpace(parts[1])
+			}
+
+			if cmdKey == "" {
+				printCommandPreview("")
+				continue
+			}
+
+			cmd, exists := commandRegistry[cmdKey]
+			if exists {
+				if cmd.Execute(engine, args) {
+					fmt.Printf("\n%sSession closed. Final spend: $%.6f%s\n", ColorYellow, engine.TotalCost(), ColorReset)
+					break
+				}
+			} else {
+				fmt.Printf("%sUnknown command: /%s%s\n", ColorRed, cmdKey, ColorReset)
+				printCommandPreview("/" + cmdKey)
 			}
 			continue
 		}
 
-		// Standard LLM Chat Query
 		fmt.Printf("%sThinking...%s\r", ColorDim, ColorReset)
-
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		res, err := engine.Ask(ctx, input)
 		cancel()
 
-		// Clear thinking text
 		fmt.Print("\r\033[K")
-
 		if err != nil {
 			fmt.Printf("%sError: %v%s\n", ColorRed, err, ColorReset)
 			continue
 		}
 
 		fmt.Printf("%s%snavi ›%s %s\n", ColorBold, ColorCyan, ColorReset, res.Text)
-		printMetaBar(res.Meta)
+		if res.Meta.Cached {
+			fmt.Printf("%s⚡ [CACHE HIT] $0.000000 | Session: $%.6f | %v%s\n",
+				ColorYellow, res.Meta.SessionCost, res.Meta.Duration.Round(time.Millisecond), ColorReset)
+		} else {
+			fmt.Printf("%s[%d in / %d out] • Turn: $%.6f • Session: $%.6f • %v%s\n",
+				ColorGray, res.Meta.PromptTokens, res.Meta.OutputTokens, res.Meta.TurnCost, res.Meta.SessionCost, res.Meta.Duration.Round(time.Millisecond), ColorReset)
+		}
 	}
-}
-
-func handleSlashCommand(engine *navi.Engine, input string) bool {
-	cleanInput := strings.TrimPrefix(input, "/")
-	parts := strings.SplitN(cleanInput, " ", 2)
-	cmdKey := strings.ToLower(parts[0])
-	args := ""
-	if len(parts) > 1 {
-		args = strings.TrimSpace(parts[1])
-	}
-
-	// Direct match for single "/" -> shows preview of all commands
-	if cmdKey == "" {
-		printCommandPreview("")
-		return false
-	}
-
-	cmd, exists := commandRegistry[cmdKey]
-	if exists {
-		return cmd.Execute(engine, args)
-	}
-
-	// If unknown, show matching commands or complete list
-	fmt.Printf("%sUnknown command: /%s%s\n", ColorRed, cmdKey, ColorReset)
-	printCommandPreview("/" + cmdKey)
-	return false
 }
 
 func printHeader(model, endpoint string) {
 	fmt.Printf("%s┌────────────────────────────────────────────────────────┐%s\n", ColorCyan, ColorReset)
 	fmt.Printf("%s│                 🧚 NAVI AI HARNESS                     │%s\n", ColorCyan, ColorReset)
 	fmt.Printf("%s│%s   Model:    %-42s %s│%s\n", ColorCyan, ColorDim, model, ColorCyan, ColorReset)
-	fmt.Printf("%s│%s   Endpoint: %-42s %s│%s\n", ColorCyan, ColorDim, truncate(endpoint, 42), ColorCyan, ColorReset)
-	fmt.Printf("%s│%s   Type %s/%s or %s/help%s to view slash commands.          %s│%s\n",
-		ColorCyan, ColorYellow, ColorBold, ColorReset+ColorDim, ColorBold, ColorReset+ColorDim, ColorCyan, ColorReset)
+	fmt.Printf("%s│%s   Endpoint: %-42s %s│%s\n", ColorCyan, ColorDim, endpoint, ColorCyan, ColorReset)
+	fmt.Printf("%s│%s   Type %s/%s to see commands (/gui, /dump, /model, etc.)   %s│%s\n",
+		ColorCyan, ColorYellow, ColorBold, ColorReset+ColorDim, ColorCyan, ColorReset)
 	fmt.Printf("%s└────────────────────────────────────────────────────────┘%s\n", ColorCyan, ColorReset)
-}
-
-func printMetaBar(m navi.ResponseMeta) {
-	if m.Cached {
-		fmt.Printf("%s⚡ [CACHE HIT] $0.000000 | Session Total: $%.6f | Latency: %v%s\n",
-			ColorYellow, m.SessionCost, m.Duration.Round(time.Millisecond), ColorReset)
-		return
-	}
-
-	fmt.Printf("%s[%d in / %d out] • Turn: $%.6f • Session: $%.6f • %v%s\n",
-		ColorGray,
-		m.PromptTokens,
-		m.OutputTokens,
-		m.TurnCost,
-		m.SessionCost,
-		m.Duration.Round(time.Millisecond),
-		ColorReset,
-	)
-}
-
-func printFooter(totalCost float64) {
-	fmt.Printf("\n%sSession closed. Final spend: $%.6f%s\n", ColorYellow, totalCost, ColorReset)
-}
-
-func truncate(str string, max int) string {
-	if len(str) > max {
-		return str[:max-3] + "..."
-	}
-	return str
 }

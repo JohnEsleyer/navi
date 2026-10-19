@@ -1,0 +1,127 @@
+:root {
+  --bg-primary: #0b0d13;
+  --bg-secondary: #131722;
+  --bg-tertiary: #1b2030;
+  --border-color: #272d42;
+  --text-primary: #f0f3fc;
+  --text-muted: #828ca6;
+  --accent-cyan: #00e5ff;
+  --accent-purple: #9d4edd;
+  --accent-green: #00e676;
+  --accent-red: #ff3366;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; }
+
+body { background: var(--bg-primary); color: var(--text-primary); height: 100vh; overflow: hidden; }
+
+#app { display: flex; flex-direction: column; height: 100vh; }
+
+/* Topbar */
+.topbar {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 20px; background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand .title { font-weight: 800; letter-spacing: 1px; color: var(--accent-cyan); }
+.badge { background: #08282b; color: var(--accent-cyan); font-size: 11px; padding: 2px 8px; border-radius: 12px; border: 1px solid rgba(0,229,255,0.3); }
+
+.actions { display: flex; gap: 8px; align-items: center; }
+
+/* Custom Dropdown */
+.custom-dropdown { position: relative; }
+.dropdown-trigger {
+  background: var(--bg-tertiary); border: 1px solid var(--border-color); color: var(--text-primary);
+  padding: 6px 14px; border-radius: 8px; cursor: pointer; display: flex; gap: 8px; align-items: center; font-size: 13px;
+}
+.dropdown-menu {
+  display: none; position: absolute; right: 0; top: 110%; background: var(--bg-secondary);
+  border: 1px solid var(--border-color); border-radius: 8px; width: 220px; z-index: 100;
+  box-shadow: 0 10px 25px rgba(0,0,0,0.5); overflow: hidden;
+}
+.dropdown-menu.active { display: block; }
+.dropdown-item { padding: 10px 14px; font-size: 12px; color: var(--text-primary); cursor: pointer; transition: 0.15s; }
+.dropdown-item:hover { background: var(--accent-cyan); color: #000; }
+
+/* Buttons */
+.btn {
+  background: var(--bg-tertiary); border: 1px solid var(--border-color); color: var(--text-primary);
+  padding: 6px 12px; border-radius: 8px; cursor: pointer; font-size: 12px; transition: 0.2s;
+}
+.btn:hover { border-color: var(--accent-cyan); }
+.btn-danger:hover { background: var(--accent-red); border-color: var(--accent-red); color: #fff; }
+.btn-primary { background: var(--accent-cyan); border-color: var(--accent-cyan); color: #04212a; font-weight: 700; }
+.btn-primary:hover { filter: brightness(1.1); }
+
+/* Chat Container */
+.chat-container {
+  flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px;
+}
+.message { display: flex; flex-direction: column; max-width: 80%; }
+.message.user { align-self: flex-end; }
+.message.assistant { align-self: flex-start; }
+.message.system { align-self: center; font-size: 12px; color: var(--text-muted); }
+
+.bubble {
+  padding: 12px 16px; border-radius: 12px; font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+}
+.message.user .bubble { background: #133a47; border: 1px solid rgba(0, 229, 255, 0.4); }
+.message.assistant .bubble { background: var(--bg-secondary); border: 1px solid var(--border-color); }
+.message.puppet .bubble { background: #2f1d44; border: 1px solid var(--accent-purple); }
+
+.meta-info { font-size: 10px; color: var(--text-muted); margin-top: 4px; padding: 0 4px; }
+.puppet-badge { color: var(--accent-purple); font-weight: bold; margin-right: 4px; }
+
+/* Input Panel */
+.input-panel {
+  padding: 14px 20px; background: var(--bg-secondary); border-top: 1px solid var(--border-color);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.input-wrapper { display: flex; gap: 10px; align-items: center; }
+textarea {
+  flex: 1; background: var(--bg-primary); border: 1px solid var(--border-color); color: var(--text-primary);
+  border-radius: 10px; padding: 10px 14px; font-size: 14px; resize: none; outline: none; height: 42px;
+}
+textarea:focus { border-color: var(--accent-cyan); }
+.btn-send {
+  background: var(--accent-cyan); border: none; width: 42px; height: 42px; border-radius: 10px;
+  cursor: pointer; display: flex; align-items: center; justify-content: center; color: #04212a;
+}
+
+/* Puppet Mode Switcher */
+.role-selector { display: flex; align-items: center; }
+.toggle-container { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; }
+.toggle-container input { display: none; }
+.slider {
+  width: 28px; height: 16px; background: var(--border-color); border-radius: 10px; position: relative; transition: 0.3s;
+}
+.slider::before {
+  content: ""; width: 12px; height: 12px; background: #fff; border-radius: 50%;
+  position: absolute; top: 2px; left: 2px; transition: 0.3s;
+}
+input:checked + .slider { background: var(--accent-purple); }
+input:checked + .slider::before { transform: translateX(12px); }
+.toggle-label { color: var(--text-muted); font-size: 12px; }
+
+/* Custom Modal */
+.custom-modal-backdrop {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
+  justify-content: center; align-items: center; z-index: 1000;
+}
+.custom-modal-card {
+  background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 12px;
+  padding: 24px; width: 380px; box-shadow: 0 20px 40px rgba(0,0,0,0.8);
+}
+.custom-modal-card h3 { margin-bottom: 8px; color: var(--accent-cyan); font-size: 16px; }
+.custom-modal-card p { font-size: 13px; color: var(--text-muted); margin-bottom: 20px; line-height: 1.4; white-space: pre-wrap; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* Toast */
+.toast-container { position: fixed; bottom: 80px; right: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 2000; }
+.toast {
+  background: var(--bg-secondary); border: 1px solid var(--accent-cyan); color: var(--text-primary);
+  padding: 10px 16px; border-radius: 8px; font-size: 13px; box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+  animation: slideIn 0.2s ease-out;
+}
+@keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
