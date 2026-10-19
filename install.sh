@@ -129,10 +129,86 @@ fi
 cd "$REPO_ROOT"
 [ -f go.mod ] || die "no go.mod in $REPO_ROOT - is this the Navi repo?"
 
-command -v go >/dev/null 2>&1 || die "Go toolchain not found on PATH. Install Go $MIN_GO+ first."
+# Locate a Go toolchain. `command -v go` is tried first so an explicit PATH
+# choice always wins, but that is not sufficient on its own: many installs put
+# Go on PATH via an rc file (.bashrc, .profile), and those are sourced only by
+# interactive shells. A script like this one never sees them, so a perfectly
+# working Go looks missing. Fall back to the usual install locations.
+#
+# Under sudo, $HOME points at /root, so resolve the invoking user's home too.
+find_go() {
+  if command -v go >/dev/null 2>&1; then
+    command -v go
+    return 0
+  fi
+
+  local real_home="$HOME"
+  if [ -n "${SUDO_USER:-}" ]; then
+    real_home="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)"
+    [ -n "$real_home" ] || real_home="$HOME"
+  fi
+
+  local d base candidate best="" best_ver="" best_tier=99 ver tier
+  local -a bases=()
+
+  # Versioned hand installs. A downloaded tarball extracts to a nested
+  # go/ dir (go1.26.1/go/bin/go), but some people unpack it flat
+  # (go1.26.1/bin/go), so both layouts are checked.
+  for d in "$real_home"/go[0-9]*.[0-9]* "$real_home"/sdk/go*; do
+    [ -d "$d" ] && bases+=("$d" "$d/go")
+  done
+  # Then the standard system and user locations.
+  for d in /usr/local/go /usr/lib/go* /usr/lib/golang /snap/go/current "$real_home"/go /opt/go*; do
+    [ -d "$d" ] && bases+=("$d")
+  done
+
+  # Paths cannot be ordered to reveal which toolchain is newest - sorting
+  # /usr/local/go above ~/go1.26.1 would only reflect that "usr" > "home" as
+  # strings. Ask each binary its real version instead. Lower tier wins; ties
+  # go to the higher version. Tier 1 is the versioned hand installs.
+  for base in "${bases[@]}"; do
+    candidate="$base/bin/go"
+    [ -x "$candidate" ] || continue
+
+    case "$base" in
+      "$real_home"/go[0-9]*.[0-9]*|"$real_home"/go[0-9]*.[0-9]*/go|"$real_home"/sdk/go*) tier=1 ;;
+      *) tier=2 ;;
+    esac
+
+    ver="$("$candidate" env GOVERSION 2>/dev/null | sed 's/^go//')"
+    [ -n "$ver" ] || continue
+
+    if [ "$tier" -lt "$best_tier" ] \
+      || { [ "$tier" -eq "$best_tier" ] && [ "$(printf '%s\n%s\n' "$best_ver" "$ver" | sort -V | tail -n1)" = "$ver" ]; }; then
+      best="$candidate"; best_ver="$ver"; best_tier="$tier"
+    fi
+  done
+
+  [ -n "$best" ] || return 1
+  printf '%s\n' "$best"
+}
+
+GO_BIN="$(find_go)" || die "Go toolchain not found.
+
+  Looked at: PATH, then ~/go*/go/bin, ~/sdk/go*/bin, /usr/local/go/bin,
+              /usr/lib/go*/bin, /snap/go/current/bin and /opt/go*/bin.
+
+  Install Go $MIN_GO+ from https://go.dev/dl/, or if it is already installed
+  somewhere unusual, run the installer with Go on PATH:
+      PATH=/path/to/go/bin:\$PATH ./install.sh"
+
+# Make the resolved toolchain visible to every later `go` invocation (and to
+# any subprocesses the GUI/cgo build spawns).
+GO_DIR="$(dirname "$GO_BIN")"
+case ":$PATH:" in
+  *":$GO_DIR:"*) ;;
+  *) export PATH="$GO_DIR:$PATH" ;;
+esac
+
+[ "$GO_BIN" = "$(command -v go)" ] || step "go:       using $GO_BIN (not on PATH)"
 
 GO_VERSION="$(go env GOVERSION 2>/dev/null | sed 's/^go//')"
-[ -n "$GO_VERSION" ] || die "could not determine Go version"
+[ -n "$GO_VERSION" ] || die "could not determine Go version from $GO_BIN"
 
 if ! printf '%s\n%s\n' "$MIN_GO" "$GO_VERSION" | sort -V -C; then
   die "Go $GO_VERSION is too old; Navi needs $MIN_GO+"
