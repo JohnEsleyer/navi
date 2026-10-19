@@ -355,7 +355,13 @@ step "ok: $WORKDIR/$BIN_NAME"
 BUILT_GUI=0
 if [ "$WANT_GUI" -eq 1 ]; then
   info "Building $GUI_NAME (desktop GUI, best-effort)"
-  if GOFLAGS="-trimpath" go build -o "$WORKDIR/$GUI_NAME" ./cmd/navi-gui 2>"$WORKDIR/gui-build.log"; then
+  # `-tags production` is mandatory, not cosmetic. Wails ships the real app
+  # behind `//go:build production` (and `//go:build dev`); with neither tag Go
+  # compiles internal/app/app_default_unix.go instead, a stub whose Run()
+  # only returns "Wails applications will not build without the correct build
+  # tags." The binary still links and the build looks successful - the failure
+  # surfaces only at launch, which makes a missing tag easy to miss.
+  if GOFLAGS="-trimpath" go build -tags production -o "$WORKDIR/$GUI_NAME" ./cmd/navi-gui 2>"$WORKDIR/gui-build.log"; then
     BUILT_GUI=1
     step "ok: $WORKDIR/$GUI_NAME"
   else
