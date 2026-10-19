@@ -294,7 +294,7 @@ func registerCommands() {
 	commandRegistry["exit"] = SlashCommand{
 		Name:        "/exit",
 		Args:        "",
-		Description: "Close the Navi session",
+		Description: "Close the Navi session (or press Ctrl+C)",
 		Execute: func(engine *navi.Engine, args string) bool {
 			return true
 		},
@@ -669,16 +669,9 @@ func readInteractivePrompt(historyEntries *[]string) (string, bool) {
 
 		b := buf[0]
 
-		if b == 3 { // Ctrl+C
+		if b == 3 { // Ctrl+C: same contract as /exit.
 			clearCurrentPopup()
-			if len(line) > 0 {
-				fmt.Print("^C\n")
-				line = nil
-				cursor = 0
-				render()
-				continue
-			}
-			fmt.Println()
+			fmt.Println("^C")
 			return "/exit", true
 		}
 
@@ -797,9 +790,12 @@ func readInteractivePrompt(historyEntries *[]string) (string, bool) {
 	}
 }
 
-// launchGUI starts the desktop interface, preferring a prebuilt binary over
-// `go run`. It resolves paths independently of the caller's working directory,
-// reaps the child, and reports launch failures instead of swallowing them.
+// launchGUI hands control over to the desktop interface synchronously. The
+// CLI suspends itself while the GUI window is open and, once it is closed,
+// resumes the same terminal session after adopting whatever the GUI changed
+// (sessions, messages, model) through the shared chat store. A prebuilt
+// binary is preferred over `go run`; paths resolve independently of the
+// caller's working directory.
 func launchGUI(engine *navi.Engine) {
 	cmd, how := guiCommand(engine)
 
@@ -812,23 +808,36 @@ func launchGUI(engine *navi.Engine) {
 		"NAVI_BASE_URL="+engine.GetBaseURL(),
 	)
 
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// Default: keep the CLI clean of GTK/WebKit diagnostic noise while it
+	// waits for the window to close. NAVI_DEBUG=1 restores full output.
+	if os.Getenv("NAVI_DEBUG") == "1" {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
 
 	if err := cmd.Start(); err != nil {
 		fmt.Printf("%s✖ Failed to launch GUI (%s): %v%s\n", ColorRed, how, err, ColorReset)
 		return
 	}
 
-	fmt.Printf("%s✔ GUI launching via %s (pid %d)%s\n", ColorGreen, how, cmd.Process.Pid, ColorReset)
+	fmt.Printf("%s✔ GUI launched via %s (pid %d)%s\n", ColorGreen, how, cmd.Process.Pid, ColorReset)
+	fmt.Printf("%s✦ GUI is active. Close the GUI window to hand control back to the CLI.%s\n",
+		ColorDim, ColorReset)
 
-	// Reap in the background so the child never becomes a zombie, and surface
-	// a late failure (e.g. `go run` failing to find go.mod) to the user.
-	go func() {
-		if err := cmd.Wait(); err != nil {
-			fmt.Printf("%s✖ GUI exited with error: %v%s\n", ColorRed, err, ColorReset)
-		}
-	}()
+	_ = cmd.Wait()
+
+	// The GUI had its own engine writing the same store; adopt its changes
+	// (new turns, switch, rename or model change) before reprompting.
+	engine.SyncFromStore()
+
+	active := engine.ActiveSession()
+	title := "New Chat"
+	if active != nil && strings.TrimSpace(active.Title) != "" {
+		title = active.Title
+	}
+
+	fmt.Printf("\n%s✔ GUI closed. CLI resumed [session: %s | model: %s]%s\n\n",
+		ColorGreen, title, engine.GetStats().Model, ColorReset)
 }
 
 // guiCommand picks how to start the GUI: a prebuilt binary if one exists,

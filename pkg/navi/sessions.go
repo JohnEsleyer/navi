@@ -7,6 +7,41 @@ import "strings"
 // degrades to a store-less engine rather than refusing to start, and a missing
 // store must surface as an error or no-op, never a panic.
 
+// reloadableStore is implemented by stores that hold state in memory and can
+// refresh it from disk. The JSON fallback is one: without a reload here, a
+// CLI resolving after a separate GUI process wrote the same file would read
+// its own stale cache instead of the GUI's changes.
+type reloadableStore interface {
+	reload() error
+}
+
+// SyncFromStore reloads the most recently updated session and its message
+// history from the persistent store. Useful when a GUI or external tool
+// modified the database and the current engine should adopt those changes.
+// ListSessions orders by updated_at DESC, so index 0 is the newest.
+func (e *Engine) SyncFromStore() {
+	if e.store == nil {
+		return
+	}
+	if r, ok := e.store.(reloadableStore); ok {
+		_ = r.reload()
+	}
+	sessions, err := e.store.ListSessions()
+	if err != nil || len(sessions) == 0 {
+		return
+	}
+	latest := sessions[0]
+
+	e.sessionMu.Lock()
+	e.activeSession = latest
+	e.sessionMu.Unlock()
+	e.loadSessionHistory(latest.ID)
+
+	if latest.Model != "" && latest.Model != e.model() {
+		e.SetModel(latest.Model)
+	}
+}
+
 // ChatAPI exposes the offline storage interface for software wrappers that
 // want direct programmatic access without going through the Engine.
 func (e *Engine) ChatAPI() ChatAPI {

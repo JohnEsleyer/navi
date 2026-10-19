@@ -886,3 +886,15 @@ func (f *fallbackStore) Close() error {
 	defer f.mu.Unlock()
 	return f.save()
 }
+
+// reload re-reads the JSON file after another process may have written it,
+// discarding this cache's in-memory state. It is why SyncFromStore can pick
+// up sessions created by a GUI running as a separate process on the same db.
+func (f *fallbackStore) reload() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sessions = make(map[string]*Session)
+	f.messages = make(map[string][]MessageRecord)
+	f.history = make(map[string]int64)
+	return f.load()
+}
