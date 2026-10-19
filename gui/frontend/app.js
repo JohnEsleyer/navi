@@ -138,12 +138,35 @@ async function refreshModelDropdown() {
   });
 }
 
+async function commitModelInput() {
+  const val = modelInput.value.trim();
+  if (!val) return;
+  if (window.go && window.go.main && window.go.main.App) {
+    await window.go.main.App.SetModel(val);
+    // Record it so it shows up next time; harmless if the call fails.
+    await window.go.main.App.SaveModelHistory(val).catch(() => {});
+  }
+}
+
 modelTrigger.addEventListener("click", (e) => {
   e.stopPropagation();
   const opening = !modelMenu.classList.contains("active");
   modelMenu.classList.toggle("active", opening);
   modelTrigger.classList.toggle("open", opening);
   if (opening) refreshModelDropdown();
+});
+
+// Focusing the input also opens the history dropdown, so the previous models
+// are one click away without touching the trigger.
+modelInput.addEventListener("focus", () => {
+  modelMenu.classList.add("active");
+  modelTrigger.classList.add("open");
+  refreshModelDropdown();
+});
+
+// Committing on change covers blur, paste and autofill, not just Enter.
+modelInput.addEventListener("change", async () => {
+  await commitModelInput();
 });
 
 // Enter in the input commits a typed model name.
@@ -154,11 +177,7 @@ modelInput.addEventListener("keydown", async (e) => {
     if (!val) return;
     modelMenu.classList.remove("active");
     modelTrigger.classList.remove("open");
-    if (window.go && window.go.main && window.go.main.App) {
-      await window.go.main.App.SetModel(val);
-      // Record it so it shows up next time; harmless if the call fails.
-      await window.go.main.App.SaveModelHistory(val).catch(() => {});
-    }
+    await commitModelInput();
     showToast(`Model set to: ${val}`);
   } else if (e.key === "Escape") {
     modelMenu.classList.remove("active");
@@ -366,6 +385,14 @@ async function handleSend() {
 
   if (window.go && window.go.main && window.go.main.App) {
     try {
+      // Sync the combobox before asking, so a typed-but-not-committed model is
+      // used for this turn and recorded in history too.
+      const currModel = modelInput.value.trim();
+      if (currModel) {
+        await window.go.main.App.SetModel(currModel);
+        await window.go.main.App.SaveModelHistory(currModel).catch(() => {});
+      }
+
       const res = await window.go.main.App.Ask(text);
       const meta = res.meta.cached
         ? `${svgBolt} CACHE HIT · $0.000000`

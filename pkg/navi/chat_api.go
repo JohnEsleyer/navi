@@ -63,3 +63,10 @@ type ChatAPI interface {
 	// Lifecycle
 	Close() error
 }
+
+// NewChatAPI creates or opens an offline chat database at dbPath.
+// If dbPath is empty, it uses the default local storage path (~/.config/navi/navi.db).
+// This is the direct entry point for third-party programs and software wrappers.
+func NewChatAPI(dbPath string) (ChatAPI, error) {
+	return OpenChatStore(dbPath)
+}

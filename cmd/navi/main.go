@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -17,15 +19,17 @@ import (
 )
 
 const (
-	ColorReset  = "\033[0m"
-	ColorBold   = "\033[1m"
-	ColorDim    = "\033[2m"
-	ColorCyan   = "\033[36m"
-	ColorGreen  = "\033[32m"
-	ColorYellow = "\033[33m"
-	ColorRed    = "\033[31m"
-	ColorGray   = "\033[90m"
-	ColorPurple = "\033[35m"
+	ColorReset   = "\033[0m"
+	ColorBold    = "\033[1m"
+	ColorDim     = "\033[2m"
+	ColorCyan    = "\033[36m"
+	ColorGreen   = "\033[32m"
+	ColorYellow  = "\033[33m"
+	ColorRed     = "\033[31m"
+	ColorGray    = "\033[90m"
+	ColorPurple  = "\033[35m"
+	ColorHiCyan  = "\033[96m"
+	ColorHiWhite = "\033[97m"
 )
 
 type SlashCommand struct {
@@ -220,6 +224,8 @@ func registerCommands() {
 				return false
 			}
 			engine.SetModel(args)
+			// Record the switch so it appears in /model history and the GUI combobox.
+			_ = engine.SaveModelHistory(args)
 			fmt.Printf("%s✔ Switched active model to %s%s\n", ColorGreen, args, ColorReset)
 			return false
 		},
@@ -319,7 +325,7 @@ func printCommandPreview(filter string) {
 
 	for _, k := range keys {
 		cmd := commandRegistry[k]
-		if filter != "" && !strings.HasPrefix(cmd.Name, filter) {
+		if filter != "" && !strings.HasPrefix(cmd.Name, filter) && !strings.Contains(cmd.Name, strings.TrimPrefix(filter, "/")) {
 			continue
 		}
 		cmdSignature := fit(fmt.Sprintf("%s %s", cmd.Name, cmd.Args), sigW)
@@ -393,20 +399,22 @@ func isTerminal(f *os.File) bool {
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
-// runSpinner starts a Braille spinner showing elapsed seconds and returns a
-// stop function. stop is idempotent, so calling it twice cannot panic, and it
-// always clears the line so the spinner never collides with the reply.
+// runSpinner starts a smooth glowing Braille spinner showing elapsed seconds
+// and returns a stop function. The frame color cycles through a glow palette
+// for the animated look. stop is idempotent, so calling it twice cannot panic,
+// and it always clears the line so the spinner never collides with the reply.
 func runSpinner(label string) func() {
 	if !isTerminal(os.Stdout) {
 		return func() {}
 	}
 
 	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	glowColors := []string{ColorCyan, ColorHiCyan, ColorHiWhite, ColorPurple, ColorCyan}
 	done := make(chan struct{})
 	start := time.Now()
 
 	go func() {
-		ticker := time.NewTicker(80 * time.Millisecond)
+		ticker := time.NewTicker(75 * time.Millisecond)
 		defer ticker.Stop()
 		for i := 0; ; i++ {
 			select {
@@ -414,8 +422,10 @@ func runSpinner(label string) func() {
 				return
 			case <-ticker.C:
 				elapsed := time.Since(start).Seconds()
-				fmt.Printf("\r%s%s%s %s%s %.1fs%s\033[K",
-					ColorCyan, frames[i%len(frames)], ColorReset,
+				color := glowColors[i%len(glowColors)]
+				frame := frames[i%len(frames)]
+				fmt.Printf("\r%s✦ %s%s%s %s%s %.1fs%s\033[K",
+					color, ColorBold, frame, ColorReset,
 					ColorDim, label, elapsed, ColorReset)
 			}
 		}
@@ -430,35 +440,361 @@ func runSpinner(label string) func() {
 	}
 }
 
-// renderTypewriter streams a response word by word for a "live" feel. The
-// per-word delay shrinks as the answer grows so a long reply is never delayed
-// by more than ~1.5s total, and non-terminal output is written whole.
+// renderTypewriter streams a response rune by rune for a "live" feel, with
+// extra micro-cadence pauses on sentence ends so the pacing reads naturally.
+// Newlines, indentation and code-block formatting arrive untouched because the
+// text is streamed as-is rather than re-tokenized into words. Longer answers
+// get bigger steps so a long reply is never delayed by more than a couple of
+// seconds total, and non-terminal output is written whole.
 func renderTypewriter(text string) {
 	if !isTerminal(os.Stdout) {
 		fmt.Println(text)
 		return
 	}
 
-	words := strings.Fields(text)
-	if len(words) == 0 {
+	runes := []rune(text)
+	total := len(runes)
+	if total == 0 {
 		fmt.Println()
 		return
 	}
 
-	const maxTotal = 1500 * time.Millisecond
-	delay := 12 * time.Millisecond
-	if total := time.Duration(len(words)) * delay; total > maxTotal {
-		delay = maxTotal / time.Duration(len(words))
+	step := 1
+	delay := 10 * time.Millisecond
+	if total > 400 {
+		step = total / 80
+		if step < 2 {
+			step = 2
+		}
+		delay = 12 * time.Millisecond
+	} else if total > 150 {
+		step = 2
+		delay = 10 * time.Millisecond
 	}
 
-	for i, w := range words {
-		fmt.Print(w)
-		if i < len(words)-1 {
-			fmt.Print(" ")
+	for i := 0; i < total; i += step {
+		end := i + step
+		if end > total {
+			end = total
 		}
-		time.Sleep(delay)
+		fmt.Print(string(runes[i:end]))
+		lastRune := runes[end-1]
+		if lastRune == '\n' {
+			time.Sleep(delay + 8*time.Millisecond)
+		} else if lastRune == '.' || lastRune == '!' || lastRune == '?' {
+			time.Sleep(delay + 6*time.Millisecond)
+		} else {
+			time.Sleep(delay)
+		}
 	}
 	fmt.Println()
+}
+
+// --- Terminal Raw Mode & Interactive Slash-Command Line Reader ---
+
+type termState struct {
+	state string
+}
+
+// enableRawTerminal switches the tty into cbreak/no-echo mode so every
+// keystroke reaches us immediately. stty is used instead of direct termios
+// syscalls to stay dependency-free; the original mode string is captured so
+// restore() can put the terminal back exactly as it was.
+func enableRawTerminal() (*termState, error) {
+	if !isTerminal(os.Stdin) {
+		return nil, fmt.Errorf("stdin is not a tty")
+	}
+	cmd := exec.Command("stty", "-g")
+	cmd.Stdin = os.Stdin
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	st := strings.TrimSpace(string(out))
+
+	setCmd := exec.Command("stty", "-icanon", "-echo", "min", "1", "time", "0")
+	setCmd.Stdin = os.Stdin
+	if err := setCmd.Run(); err != nil {
+		altCmd := exec.Command("stty", "cbreak", "-echo")
+		altCmd.Stdin = os.Stdin
+		if err := altCmd.Run(); err != nil {
+			return nil, err
+		}
+	}
+	return &termState{state: st}, nil
+}
+
+func (t *termState) restore() {
+	if t == nil || t.state == "" {
+		return
+	}
+	cmd := exec.Command("stty", t.state)
+	cmd.Stdin = os.Stdin
+	_ = cmd.Run()
+}
+
+// pipedScanner drains stdin line by line when stdin is not a tty. It is
+// shared across calls on purpose: a fresh bufio.Scanner per prompt would
+// buffer all piped input on its first read, stranding every line after the
+// first (so `printf '/help\n/session\n'` would only ever run /help).
+var pipedScanner *bufio.Scanner
+
+func readPipedLine() (string, bool) {
+	if pipedScanner == nil {
+		pipedScanner = bufio.NewScanner(os.Stdin)
+	}
+	if !pipedScanner.Scan() {
+		return "", false
+	}
+	return strings.TrimSpace(pipedScanner.Text()), true
+}
+
+// readInteractivePrompt handles character-by-character interactive line
+// editing. As soon as the input starts with '/', a real-time command popup
+// appears beneath the prompt, live-filtering on every keystroke (including
+// backspace), with Tab completing a unique match. Arrow keys move the cursor
+// and page through input history. The popup erases itself when the line stops
+// with '/', before Enter fires, so executed output always starts clean.
+func readInteractivePrompt(historyEntries *[]string) (string, bool) {
+	if !isTerminal(os.Stdin) {
+		return readPipedLine()
+	}
+
+	ts, err := enableRawTerminal()
+	if err != nil {
+		fmt.Printf("%s%syou ›%s ", ColorBold, ColorGreen, ColorReset)
+		return readPipedLine()
+	}
+	defer ts.restore()
+
+	const promptPrefix = "you › "
+	const promptLen = 6
+
+	var line []rune
+	cursor := 0
+	lastPopupLines := 0
+	histIdx := -1
+	var tempInput string
+
+	// clearCurrentPopup erases any previously drawn popup lines under the
+	// prompt, then returns the cursor to the prompt row.
+	clearCurrentPopup := func() {
+		if lastPopupLines > 0 {
+			fmt.Print("\n\033[J")
+			fmt.Printf("\033[%dA\r", 1)
+			lastPopupLines = 0
+		}
+	}
+
+	// render redraws the prompt line and the instant slash-commands popup when
+	// the input starts with '/'.
+	render := func() {
+		clearCurrentPopup()
+		fmt.Printf("\r\033[K%s%s%s%s%s", ColorBold, ColorGreen, promptPrefix, ColorReset, string(line))
+
+		if len(line) > 0 && line[0] == '/' {
+			filter := strings.ToLower(string(line))
+			var matching []SlashCommand
+			var keys []string
+			for k := range commandRegistry {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+
+			for _, k := range keys {
+				cmd := commandRegistry[k]
+				if filter == "/" || strings.HasPrefix(cmd.Name, filter) || strings.Contains(cmd.Name, strings.TrimPrefix(filter, "/")) {
+					matching = append(matching, cmd)
+				}
+			}
+
+			const sigW = 18
+			const descW = 41
+			inner := 2 + sigW + 1 + descW + 1
+			const title = "── Commands (Tab to complete) "
+			dashes := inner - utf8.RuneCountInString(title)
+			if dashes < 2 {
+				dashes = 2
+			}
+
+			fmt.Printf("\n%s┌%s%s┐%s", ColorPurple, title, strings.Repeat("─", dashes), ColorReset)
+			linesDrawn := 1
+
+			if len(matching) == 0 {
+				emptyMsg := fmt.Sprintf("  No command matches %q", string(line))
+				fmt.Printf("\n%s│%s %-*s%s│%s", ColorPurple, ColorDim, inner, fit(emptyMsg, inner), ColorPurple, ColorReset)
+				linesDrawn++
+			} else {
+				limit := 7
+				if len(matching) < limit {
+					limit = len(matching)
+				}
+				for i := 0; i < limit; i++ {
+					cmd := matching[i]
+					sig := fit(fmt.Sprintf("%s %s", cmd.Name, cmd.Args), sigW)
+					fmt.Printf("\n%s│%s  %s%-*s%s %-*s %s│%s",
+						ColorPurple, ColorReset,
+						ColorBold, sigW, sig, ColorReset,
+						descW, fit(cmd.Description, descW),
+						ColorPurple, ColorReset)
+					linesDrawn++
+				}
+				if len(matching) > limit {
+					more := fmt.Sprintf("  ... and %d more", len(matching)-limit)
+					fmt.Printf("\n%s│%s%-*s%s│%s", ColorPurple, ColorDim, inner, more, ColorPurple, ColorReset)
+					linesDrawn++
+				}
+			}
+			fmt.Printf("\n%s└%s┘%s", ColorPurple, strings.Repeat("─", inner), ColorReset)
+			linesDrawn++
+
+			lastPopupLines = linesDrawn
+			fmt.Printf("\033[%dA\r", linesDrawn)
+		}
+
+		targetCol := promptLen + cursor
+		fmt.Printf("\r\033[%dC", targetCol)
+	}
+
+	render()
+
+	buf := make([]byte, 16)
+	for {
+		n, err := os.Stdin.Read(buf)
+		if err != nil || n == 0 {
+			clearCurrentPopup()
+			fmt.Println()
+			return "", false
+		}
+
+		b := buf[0]
+
+		if b == 3 { // Ctrl+C
+			clearCurrentPopup()
+			if len(line) > 0 {
+				fmt.Print("^C\n")
+				line = nil
+				cursor = 0
+				render()
+				continue
+			}
+			fmt.Println()
+			return "/exit", true
+		}
+
+		if b == 4 { // Ctrl+D
+			clearCurrentPopup()
+			if len(line) == 0 {
+				fmt.Println()
+				return "", false
+			}
+			continue
+		}
+
+		if b == '\r' || b == '\n' { // Enter
+			clearCurrentPopup()
+			fmt.Println()
+			res := strings.TrimSpace(string(line))
+			if res != "" && historyEntries != nil {
+				*historyEntries = append(*historyEntries, res)
+			}
+			return res, true
+		}
+
+		if b == '\t' { // Tab autocomplete
+			if len(line) > 0 && line[0] == '/' {
+				filter := strings.ToLower(string(line))
+				var matches []string
+				for k, cmd := range commandRegistry {
+					if strings.HasPrefix(cmd.Name, filter) {
+						matches = append(matches, "/"+k)
+					}
+				}
+				if len(matches) == 1 {
+					line = []rune(matches[0] + " ")
+					cursor = len(line)
+					render()
+				}
+			}
+			continue
+		}
+
+		if b == 127 || b == 8 { // Backspace
+			if cursor > 0 {
+				line = append(line[:cursor-1], line[cursor:]...)
+				cursor--
+				render()
+			}
+			continue
+		}
+
+		if b == 27 { // Escape sequence
+			if n >= 3 && buf[1] == '[' {
+				switch buf[2] {
+				case 'D': // Left arrow
+					if cursor > 0 {
+						cursor--
+						render()
+					}
+				case 'C': // Right arrow
+					if cursor < len(line) {
+						cursor++
+						render()
+					}
+				case 'A': // Up arrow: recall previous input
+					if historyEntries != nil && len(*historyEntries) > 0 {
+						if histIdx == -1 {
+							tempInput = string(line)
+							histIdx = len(*historyEntries) - 1
+						} else if histIdx > 0 {
+							histIdx--
+						}
+						line = []rune((*historyEntries)[histIdx])
+						cursor = len(line)
+						render()
+					}
+				case 'B': // Down arrow: forward in history
+					if historyEntries != nil && histIdx != -1 {
+						if histIdx < len(*historyEntries)-1 {
+							histIdx++
+							line = []rune((*historyEntries)[histIdx])
+						} else {
+							histIdx = -1
+							line = []rune(tempInput)
+						}
+						cursor = len(line)
+						render()
+					}
+				case 'H': // Home
+					cursor = 0
+					render()
+				case 'F': // End
+					cursor = len(line)
+					render()
+				case '3': // Delete key
+					if cursor < len(line) {
+						line = append(line[:cursor], line[cursor+1:]...)
+						render()
+					}
+				}
+			} else {
+				clearCurrentPopup()
+				targetCol := promptLen + cursor
+				fmt.Printf("\r\033[%dC", targetCol)
+			}
+			continue
+		}
+
+		// Insert typed runes at the cursor, ignoring control characters.
+		runes := []rune(string(buf[:n]))
+		for _, r := range runes {
+			if r >= 32 {
+				line = append(line[:cursor], append([]rune{r}, line[cursor:]...)...)
+				cursor++
+			}
+		}
+		render()
+	}
 }
 
 // launchGUI starts the desktop interface, preferring a prebuilt binary over
@@ -591,6 +927,16 @@ func main() {
 	// Flush the chat store on exit so the last turn is never lost.
 	defer func() { _ = engine.Close() }()
 
+	// Exit on SIGINT/SIGTERM: report the final spend, flush the store, quit.
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		fmt.Printf("\n%sSession interrupted. Final spend: $%.6f%s\n", ColorYellow, engine.TotalCost(), ColorReset)
+		_ = engine.Close()
+		os.Exit(0)
+	}()
+
 	sessionTitle := "New Chat"
 	if active := engine.ActiveSession(); active != nil && strings.TrimSpace(active.Title) != "" {
 		sessionTitle = active.Title
@@ -598,14 +944,14 @@ func main() {
 
 	printHeader(engine.GetStats().Model, engine.GetBaseURL(), sessionTitle)
 
-	scanner := bufio.NewScanner(os.Stdin)
+	var historyEntries []string
+
 	for {
-		fmt.Printf("\n%s%syou ›%s ", ColorBold, ColorGreen, ColorReset)
-		if !scanner.Scan() {
+		input, ok := readInteractivePrompt(&historyEntries)
+		if !ok {
 			break
 		}
 
-		input := strings.TrimSpace(scanner.Text())
 		if input == "" {
 			continue
 		}
@@ -674,6 +1020,11 @@ func printHeader(model, endpoint, sessionTitle string) {
 		fmt.Printf("%s│%s%-*s%s│%s\n", ColorCyan, ColorDim, inner, text, ColorCyan, ColorReset)
 	}
 
+	// Wayfinder Spark flourish, terminal-only so piped output stays clean.
+	if isTerminal(os.Stdout) {
+		fmt.Printf("\n  %s✦ %sNAVI %sWAYFINDER%s ✦%s\n", ColorCyan, ColorBold, ColorPurple, ColorCyan, ColorReset)
+	}
+
 	fmt.Printf("%s┌%s┐%s\n", ColorCyan, strings.Repeat("─", inner), ColorReset)
 	row("              NAVI AI HARNESS              ")
 	row("   Session:  " + fit(sessionTitle, 42))
@@ -681,6 +1032,6 @@ func printHeader(model, endpoint, sessionTitle string) {
 	row("   Endpoint: " + fit(endpoint, 42))
 	// No inline color here: the row helper pads with %-*s, and escape bytes
 	// count toward that width, which would silently shrink the visible row.
-	row("   Type / for commands (/session, /gui, /model, etc.)")
+	row("   Type / for instant command guide (/model, /session)")
 	fmt.Printf("%s└%s┘%s\n", ColorCyan, strings.Repeat("─", inner), ColorReset)
 }
