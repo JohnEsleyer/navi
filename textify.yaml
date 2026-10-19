@@ -18,6 +18,9 @@ output_file: codebase.txt
 dirs:
     .:
         enabled: true
+        # install.sh has no extension, so the allow-list would skip it.
+        include:
+            - install.sh
         extensions:
             - gitignore
             - md
