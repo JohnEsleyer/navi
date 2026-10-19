@@ -6,12 +6,28 @@ export function Ask(arg1) {
   return window['go']['main']['App']['Ask'](arg1);
 }
 
+export function CreateSession(arg1) {
+  return window['go']['main']['App']['CreateSession'](arg1);
+}
+
+export function DeleteModelHistory(arg1) {
+  return window['go']['main']['App']['DeleteModelHistory'](arg1);
+}
+
+export function DeleteSession(arg1) {
+  return window['go']['main']['App']['DeleteSession'](arg1);
+}
+
 export function DumpContext() {
   return window['go']['main']['App']['DumpContext']();
 }
 
 export function GetAPIKey() {
   return window['go']['main']['App']['GetAPIKey']();
+}
+
+export function GetActiveSession() {
+  return window['go']['main']['App']['GetActiveSession']();
 }
 
 export function GetBaseURL() {
@@ -22,8 +38,20 @@ export function GetContextText() {
   return window['go']['main']['App']['GetContextText']();
 }
 
+export function GetModelHistory() {
+  return window['go']['main']['App']['GetModelHistory']();
+}
+
+export function GetSessionMessages(arg1) {
+  return window['go']['main']['App']['GetSessionMessages'](arg1);
+}
+
 export function GetStats() {
   return window['go']['main']['App']['GetStats']();
+}
+
+export function ListSessions() {
+  return window['go']['main']['App']['ListSessions']();
 }
 
 export function MaskedAPIKey() {
@@ -34,8 +62,16 @@ export function PretendAgent(arg1) {
   return window['go']['main']['App']['PretendAgent'](arg1);
 }
 
+export function RenameSession(arg1, arg2) {
+  return window['go']['main']['App']['RenameSession'](arg1, arg2);
+}
+
 export function ResetHistory() {
   return window['go']['main']['App']['ResetHistory']();
+}
+
+export function SaveModelHistory(arg1) {
+  return window['go']['main']['App']['SaveModelHistory'](arg1);
 }
 
 export function SetAPIKey(arg1) {
@@ -48,4 +84,8 @@ export function SetBaseURL(arg1) {
 
 export function SetModel(arg1) {
   return window['go']['main']['App']['SetModel'](arg1);
+}
+
+export function SwitchSession(arg1) {
+  return window['go']['main']['App']['SwitchSession'](arg1);
 }

@@ -4,24 +4,44 @@ import {navi} from '../models';
 
 export function Ask(arg1:string):Promise<navi.Result>;
 
+export function CreateSession(arg1:string):Promise<navi.Session>;
+
+export function DeleteModelHistory(arg1:string):Promise<boolean>;
+
+export function DeleteSession(arg1:string):Promise<boolean>;
+
 export function DumpContext():Promise<string>;
 
 export function GetAPIKey():Promise<string>;
+
+export function GetActiveSession():Promise<navi.Session>;
 
 export function GetBaseURL():Promise<string>;
 
 export function GetContextText():Promise<string>;
 
+export function GetModelHistory():Promise<Array<string>>;
+
+export function GetSessionMessages(arg1:string):Promise<Array<navi.MessageRecord>>;
+
 export function GetStats():Promise<navi.Stats>;
+
+export function ListSessions():Promise<Array<navi.Session>>;
 
 export function MaskedAPIKey():Promise<string>;
 
 export function PretendAgent(arg1:string):Promise<boolean>;
 
+export function RenameSession(arg1:string,arg2:string):Promise<boolean>;
+
 export function ResetHistory():Promise<boolean>;
+
+export function SaveModelHistory(arg1:string):Promise<boolean>;
 
 export function SetAPIKey(arg1:string):Promise<boolean>;
 
 export function SetBaseURL(arg1:string):Promise<boolean>;
 
 export function SetModel(arg1:string):Promise<boolean>;
+
+export function SwitchSession(arg1:string):Promise<navi.Session>;
