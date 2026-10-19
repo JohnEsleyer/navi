@@ -1,0 +1,5 @@
+/navi
+*.exe
+*.test
+*.out
+.env
