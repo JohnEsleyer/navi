@@ -351,15 +351,32 @@ fi
 # Returns 0 if the app is alive after the grace period, 1 if it exited early,
 # 2 if it could not be tested (no display available).
 gui_launches() {
-  local bin="$1" pid
+  local bin="$1" log="$2" pid uid
+  local -a probe_env=(DISPLAY="${DISPLAY:-}" WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-}")
 
   # Without a display the app cannot start at all, so a failure here would
   # say nothing about the binary. Skip rather than produce a false negative
   # on a headless host (CI, ssh, container).
   [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || return 2
 
-  "$bin" >/dev/null 2>&1 &
-  pid=$!
+  # When the installer runs under sudo, probe as the invoking user. The X
+  # server authorizes connections with a cookie from the user's Xauthority -
+  # root has none, so a root probe dies with "Authorization required, but no
+  # authorization protocol specified" even though the binary works perfectly
+  # for the user who will actually run it. env vars are forwarded explicitly
+  # because sudo resets the environment; the uid-scoped runtime dir and
+  # session bus keep WebKit and GTK talking to the user's real session.
+  if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && id "$SUDO_USER" >/dev/null 2>&1; then
+    uid="$(id -u "$SUDO_USER")"
+    probe_env+=(XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus")
+    [ -n "${XAUTHORITY:-}" ] && probe_env+=(XAUTHORITY="$XAUTHORITY")
+
+    sudo -u "$SUDO_USER" env "${probe_env[@]}" "$bin" >"$log" 2>&1 &
+    pid=$!
+  else
+    env "${probe_env[@]}" "$bin" >"$log" 2>&1 &
+    pid=$!
+  fi
 
   # A broken build exits in a fraction of a second; a healthy one stays
   # resident and keeps running until killed. Checking liveness rather than
@@ -379,6 +396,11 @@ gui_launches() {
 # ---------------------------------------------------------------- build ----
 
 WORKDIR="$(mktemp -d)"
+# Under sudo the launch probe runs as the invoking user, who must be able to
+# traverse this root-owned directory to execute the binary - mktemp defaults
+# to 0700, which is why a probe as $SUDO_USER would otherwise die with
+# "env: ... Permission denied" before GTK is ever initialized.
+chmod 755 "$WORKDIR"
 trap 'rm -rf "$WORKDIR"' EXIT
 
 info "Building $BIN_NAME (CLI)"
@@ -405,7 +427,7 @@ if [ "$WANT_GUI" -eq 1 ]; then
       step "launch:   skipped (NAVI_SKIP_LAUNCH_CHECK=1)"
       BUILT_GUI=1
     else
-      case "$(gui_launches "$WORKDIR/$GUI_NAME"; echo $?)" in
+      case "$(gui_launches "$WORKDIR/$GUI_NAME" "$WORKDIR/gui-launch.log"; echo $?)" in
         0)
           step "launch:   ok (started and stayed resident)"
           BUILT_GUI=1
@@ -416,8 +438,9 @@ if [ "$WANT_GUI" -eq 1 ]; then
           ;;
         *)
           warn "GUI built but does not start - installing the CLI only."
-          warn "A GUI that compiles yet dies on launch usually means the Wails"
-          warn "build tag is missing. Rebuild with: go build -tags production"
+          warn "Its launch output was:"
+          sed 's/^/    /' "$WORKDIR/gui-launch.log" >&2
+          warn "To install anyway, bypassing this check: NAVI_SKIP_LAUNCH_CHECK=1 ./install.sh"
           if [ "${NAVI_DEBUG:-0}" = "1" ]; then
             printf '%s\n' "--- gui build log ---"
             cat "$WORKDIR/gui-build.log"
