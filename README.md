@@ -21,6 +21,39 @@ Navi is a cost-optimized, low-latency AI harness written in Go. The core engine 
 
 ---
 
+## 📦 Installation
+
+```bash
+git clone https://github.com/JohnEsleyer/navi.git
+cd navi
+./install.sh
+```
+
+This builds and installs `navi` to `~/.local/bin`, plus `navi-gui` if your
+system has the required GUI libraries. Then:
+
+```bash
+export NAVI_API_KEY=your_key_here
+navi
+```
+
+| Flag | Effect |
+|---|---|
+| `--prefix DIR` | Install to `DIR` instead of `~/.local/bin` |
+| `--system` | Install to `/usr/local/bin` |
+| `--no-gui` | Skip the desktop GUI |
+| `--uninstall` | Remove `navi` and `navi-gui` from the target directory |
+| `--help` | Usage |
+
+The GUI is built best-effort: it needs cgo plus GTK/WebKit headers. If those
+are missing the installer warns and installs the CLI only. On Debian/Ubuntu:
+
+```bash
+sudo apt install build-essential libgtk-3-dev libwebkit2gtk-4.1-dev
+```
+
+---
+
 ## 🖥️ Desktop GUI (Built with Wails)
 
 Launch directly from the CLI with `/gui`, run independently with plain Go, or use the Wails CLI from the GUI package directory:
