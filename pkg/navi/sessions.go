@@ -180,6 +180,51 @@ func (e *Engine) RenameSession(id, title string) error {
 	return nil
 }
 
+// UpdateSessionModel updates the session's designated model in the store,
+// mirroring the change onto the in-memory copy when it is the active session.
+// Unlike SwitchSession it does not adopt the model for the engine live; use
+// UpdateSession for that combined behavior.
+func (e *Engine) UpdateSessionModel(id, model string) error {
+	if e.store == nil {
+		return nil
+	}
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return nil
+	}
+	if err := e.store.UpdateSessionModel(id, model); err != nil {
+		return err
+	}
+	e.sessionMu.Lock()
+	if e.activeSession != nil && e.activeSession.ID == id {
+		e.activeSession.Model = model
+	}
+	e.sessionMu.Unlock()
+	return nil
+}
+
+// UpdateSession edits both a conversation's title and its model. Renaming
+// goes through RenameSession so its validation and store handling are reused;
+// a model change additionally switches the live engine when the edited
+// session is the one in use, so the next question answers with it.
+func (e *Engine) UpdateSession(id, title, model string) error {
+	if err := e.RenameSession(id, title); err != nil {
+		return err
+	}
+	if model != "" {
+		if err := e.UpdateSessionModel(id, model); err != nil {
+			return err
+		}
+		e.sessionMu.RLock()
+		isActive := e.activeSession != nil && e.activeSession.ID == id
+		e.sessionMu.RUnlock()
+		if isActive {
+			e.SetModel(model)
+		}
+	}
+	return nil
+}
+
 // GetSessionMessages returns the persisted turns of a session, for replaying
 // into a UI. Unlike GetHistory it is the full log, not the sliding window.
 func (e *Engine) GetSessionMessages(id string) []MessageRecord {

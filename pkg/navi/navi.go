@@ -318,13 +318,7 @@ func (e *Engine) Ask(ctx context.Context, input string) (*Result, error) {
 	inT := parsed.Usage.PromptTokens
 	outT := parsed.Usage.CompletionTokens
 
-	pricing, exists := DefaultPricing[model]
-	if !exists {
-		pricing = DefaultPricing["gpt-4o-mini"]
-	}
-
-	turnCost := (float64(inT) / 1_000_000 * pricing.InputPer1MTokens) +
-		(float64(outT) / 1_000_000 * pricing.OutputPer1MTokens)
+	turnCost := computeTurnCost(DetectProvider(model), baseURL, model, inT, outT)
 	sessionCost := e.addUsage(inT, outT, turnCost)
 
 	// Persist the completed turn. Placed here rather than at commitExchange
@@ -344,6 +338,23 @@ func (e *Engine) Ask(ctx context.Context, input string) (*Result, error) {
 			Duration:     time.Since(start),
 		},
 	}, nil
+}
+
+// computeTurnCost prices one assistant turn. Local inference charges
+// nothing, so pricing must never fall back to a cloud rate: the check is
+// two-dimensional - a known local provider OR a custom endpoint pointed at
+// the loopback are both treated as local. Unlisted cloud models fall back to
+// the gpt-4o-mini table rather than under-reporting their cost.
+func computeTurnCost(provider Provider, baseURL, model string, inT, outT int) float64 {
+	if provider.IsLocal || IsLocalEndpoint(baseURL) {
+		return 0.0
+	}
+	pricing, exists := DefaultPricing[model]
+	if !exists {
+		pricing = DefaultPricing["gpt-4o-mini"]
+	}
+	return (float64(inT) / 1_000_000 * pricing.InputPer1MTokens) +
+		(float64(outT) / 1_000_000 * pricing.OutputPer1MTokens)
 }
 
 // commitExchange appends a completed user/assistant pair to history in one

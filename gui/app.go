@@ -251,6 +251,85 @@ func (a *App) GetBaseURL() string {
 	return a.engine.GetBaseURL()
 }
 
+// --- Provider switcher ---
+//
+// The switcher needs to hop the engine between local runtimes and cloud
+// services. All three methods are read-only against the registry: adding a
+// provider to KnownProviders automatically makes it switchable here.
+
+// GetProviders lists the registered local and cloud providers for the
+// dropdown. Non-nil so the frontend iterates safely.
+func (a *App) GetProviders() []navi.ProviderInfo {
+	return navi.GetKnownProviders()
+}
+
+// GetActiveProvider resolves which provider the engine currently points at.
+// The endpoint is the primary signal - SwitchProvider pins it explicitly -
+// with model detection as the fallback for engines that only ever set a
+// model name. A custom BaseURL is reported as-is so the UI can show the
+// user exactly where their questions go.
+func (a *App) GetActiveProvider() navi.ProviderInfo {
+	baseURL := strings.TrimRight(a.engine.GetBaseURL(), "/")
+	model := a.engine.GetStats().Model
+
+	for _, p := range navi.KnownProviders {
+		if strings.TrimRight(p.BaseURL, "/") == baseURL {
+			defModel := ""
+			if len(p.Models) > 0 {
+				defModel = p.Models[0]
+			}
+			return navi.ProviderInfo{
+				ID:           p.ID,
+				Name:         p.Name,
+				BaseURL:      p.BaseURL,
+				IsLocal:      p.IsLocal,
+				DefaultModel: defModel,
+			}
+		}
+	}
+
+	// Unknown endpoint: fall back to what the model name implies.
+	p := navi.DetectProvider(model)
+	return navi.ProviderInfo{
+		ID:           p.ID,
+		Name:         p.Name,
+		BaseURL:      a.engine.GetBaseURL(),
+		IsLocal:      p.IsLocal || navi.IsLocalEndpoint(baseURL),
+		DefaultModel: model,
+	}
+}
+
+// SwitchProvider repoints the engine at a registered provider's endpoint and
+// selects that provider's default model unless the current model already
+// belongs to the target provider. The endpoint is set explicitly (rather
+// than left to model detection) so the choice survives later model changes.
+func (a *App) SwitchProvider(providerID string) navi.ProviderInfo {
+	for _, p := range navi.KnownProviders {
+		if p.ID == providerID {
+			a.engine.SetBaseURL(p.BaseURL)
+			defModel := ""
+			if len(p.Models) > 0 {
+				defModel = p.Models[0]
+				currProvider := navi.DetectProvider(a.engine.GetStats().Model)
+				if currProvider.ID != p.ID {
+					a.engine.SetModel(defModel)
+					_ = a.engine.SaveModelHistory(defModel)
+				}
+			}
+			return navi.ProviderInfo{
+				ID:           p.ID,
+				Name:         p.Name,
+				BaseURL:      p.BaseURL,
+				IsLocal:      p.IsLocal,
+				DefaultModel: defModel,
+			}
+		}
+	}
+
+	// Unknown ID: leave the engine untouched and report current state.
+	return a.GetActiveProvider()
+}
+
 // --- Sessions & model history ---
 //
 // These are bound for the GUI's session switcher and model combobox. They
@@ -313,6 +392,13 @@ func (a *App) DeleteSession(id string) bool {
 
 func (a *App) RenameSession(id, title string) bool {
 	return a.engine.RenameSession(id, title) == nil
+}
+
+// UpdateSession edits a conversation's title and model together, so the chat
+// configuration modal can save both in one call. When the edited session is
+// the active one the engine also starts using the new model immediately.
+func (a *App) UpdateSession(id, title, model string) bool {
+	return a.engine.UpdateSession(id, title, model) == nil
 }
 
 // GetSessionMessages returns a session's stored turns so the GUI can replay a

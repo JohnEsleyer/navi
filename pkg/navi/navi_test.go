@@ -325,3 +325,120 @@ func TestSlidingWindowKeepsSystemPrompt(t *testing.T) {
 		t.Fatalf("history exceeded window: %d messages", len(hist))
 	}
 }
+
+// TestIsLocalEndpoint: the loopback family (hostnames, IPv4/IPv6 literals and
+// the wildcard bind) is local; anything else is a cloud endpoint.
+func TestIsLocalEndpoint(t *testing.T) {
+	local := []string{
+		"http://localhost:11434/v1",
+		"http://127.0.0.1:8080/v1",
+		"http://[::1]:11434/v1",
+		"http://0.0.0.0:8080/v1",
+		"http://localhost:1234/v1",
+	}
+	for _, u := range local {
+		if !IsLocalEndpoint(u) {
+			t.Errorf("IsLocalEndpoint(%q) = false, want true", u)
+		}
+	}
+
+	remote := []string{
+		"https://api.groq.com/openai/v1",
+		"https://api.openai.com/v1",
+		"http://my-own-proxy:8080/v1",
+		"https://openrouter.ai/api/v1",
+	}
+	for _, u := range remote {
+		if IsLocalEndpoint(u) {
+			t.Errorf("IsLocalEndpoint(%q) = true, want false", u)
+		}
+	}
+}
+
+// TestLocalModelIsFree: an Ollama-style model and a loopback endpoint must
+// both price a turn at exactly zero, even though the fake server reports
+// enough tokens to bill at cloud rates.
+func TestLocalModelIsFree(t *testing.T) {
+	var mu sync.Mutex
+	hits := 0
+	srv := countingServer(t, &hits, &mu)
+	defer srv.Close()
+
+	// Case 1: local provider by model name, endpoint still auto-resolves to
+	// Ollama. Point it at the test server so the HTTP call stays local.
+	e := New(Config{BaseURL: srv.URL, Model: "llama3.2:1b", APIKey: ""})
+	res, err := e.Ask(context.Background(), "hello local")
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if res.Meta.TurnCost != 0 || res.Meta.SessionCost != 0 {
+		t.Errorf("local provider priced a turn: turn=%f session=%f", res.Meta.TurnCost, res.Meta.SessionCost)
+	}
+
+	// Case 2: unknown model name but a loopback endpoint (127.0.0.1, which
+	// httptest.NewServer binds to) -> still free.
+	e2 := New(Config{BaseURL: srv.URL, Model: "mystery-model", APIKey: "k"})
+	res2, err := e2.Ask(context.Background(), "hello again")
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if res2.Meta.TurnCost != 0 {
+		t.Errorf("loopback endpoint priced a turn: %f", res2.Meta.TurnCost)
+	}
+	// The in-memory stats echo the same zero.
+	if got := e2.TotalCost(); got != 0 {
+		t.Errorf("TotalCost nonzero on loopback: %f", got)
+	}
+}
+
+// TestRemoteModelStillBilled: the free-local rule must not leak onto cloud
+// endpoints, or every session would under-report its real cost. The helper is
+// called directly with a remote provider/endpoint so no live network is
+// needed to verify the positive (nonzero) branch.
+func TestRemoteModelStillBilled(t *testing.T) {
+	provider := DetectProvider("gpt-4o-mini")
+	if provider.IsLocal {
+		t.Fatal("gpt-4o-mini should not be marked local")
+	}
+	cost := computeTurnCost(provider, "https://api.openai.com/v1", "gpt-4o-mini", 1000000, 500000)
+	want := 0.15 + 0.60*0.5 // 1M in at $0.15/MT + 0.5M out at $0.60/MT
+	if cost < want-1e-9 || cost > want+1e-9 {
+		t.Errorf("remote turn billed %f, want %f", cost, want)
+	}
+
+	// An unknown cloud model falls back to the gpt-4o-mini table rather than
+	// silently being free.
+	fallback := computeTurnCost(DetectProvider("totally-unknown-model"), "https://api.groq.com/openai/v1", "totally-unknown-model", 1000000, 0)
+	if fallback <= 0 {
+		t.Errorf("unknown-model cloud fallback priced %f, want > 0", fallback)
+	}
+
+	// ...but the same model names or endpoint being local remain free.
+	if free := computeTurnCost(DetectProvider("llama3.2:1b"), "http://localhost:11434/v1", "llama3.2:1b", 1000, 1000); free != 0 {
+		t.Errorf("local provider priced %f, want 0", free)
+	}
+	if free := computeTurnCost(DetectProvider("totally-unknown-model"), "http://127.0.0.1:8080/v1", "totally-unknown-model", 1000, 1000); free != 0 {
+		t.Errorf("loopback endpoint priced %f, want 0", free)
+	}
+}
+
+// TestOllamaHostResolution: OLLAMA_HOST accepts both bare host:port and a
+// full URL; OLLAMA_BASE_URL wins when both are set. Without either, the
+// default loopback is used.
+func TestOllamaHostResolution(t *testing.T) {
+	cases := []struct {
+		base, host, want string
+	}{
+		{"", "", "http://localhost:11434/v1"},
+		{"", "192.168.1.10:11434", "http://192.168.1.10:11434/v1"},
+		{"", "http://inference.lab:11434", "http://inference.lab:11434/v1"},
+		{"http://my-box:11434", "ignored", "http://my-box:11434"},
+	}
+	for _, tc := range cases {
+		t.Setenv("OLLAMA_BASE_URL", tc.base)
+		t.Setenv("OLLAMA_HOST", tc.host)
+		if got := resolveOllamaURL(); got != tc.want {
+			t.Errorf("resolveOllamaURL(base=%q, host=%q) = %q, want %q", tc.base, tc.host, got, tc.want)
+		}
+	}
+}

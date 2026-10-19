@@ -99,6 +99,26 @@ export namespace navi {
 		    return a;
 		}
 	}
+	export class ProviderInfo {
+	    id: string;
+	    name: string;
+	    base_url: string;
+	    is_local: boolean;
+	    default_model: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ProviderInfo(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.base_url = source["base_url"];
+	        this.is_local = source["is_local"];
+	        this.default_model = source["default_model"];
+	    }
+	}
 	export class Session {
 	    id: string;
 	    title: string;

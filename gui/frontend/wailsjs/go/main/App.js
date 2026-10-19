@@ -26,6 +26,10 @@ export function GetAPIKey() {
   return window['go']['main']['App']['GetAPIKey']();
 }
 
+export function GetActiveProvider() {
+  return window['go']['main']['App']['GetActiveProvider']();
+}
+
 export function GetActiveSession() {
   return window['go']['main']['App']['GetActiveSession']();
 }
@@ -40,6 +44,10 @@ export function GetContextText() {
 
 export function GetModelHistory() {
   return window['go']['main']['App']['GetModelHistory']();
+}
+
+export function GetProviders() {
+  return window['go']['main']['App']['GetProviders']();
 }
 
 export function GetSessionMessages(arg1) {
@@ -66,6 +74,10 @@ export function RenameSession(arg1, arg2) {
   return window['go']['main']['App']['RenameSession'](arg1, arg2);
 }
 
+export function UpdateSession(arg1, arg2, arg3) {
+  return window['go']['main']['App']['UpdateSession'](arg1, arg2, arg3);
+}
+
 export function ResetHistory() {
   return window['go']['main']['App']['ResetHistory']();
 }
@@ -88,4 +100,8 @@ export function SetModel(arg1) {
 
 export function SwitchSession(arg1) {
   return window['go']['main']['App']['SwitchSession'](arg1);
+}
+
+export function SwitchProvider(arg1) {
+  return window['go']['main']['App']['SwitchProvider'](arg1);
 }

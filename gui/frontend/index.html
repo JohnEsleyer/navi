@@ -10,6 +10,14 @@
     <!-- Top Bar -->
     <header class="topbar">
       <div class="brand">
+        <!-- Toggle Sidebar Button -->
+        <button class="btn btn-icon" id="btn-toggle-sidebar" title="Toggle chat panel">
+          <svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+            <line x1="9" y1="3" x2="9" y2="21"/>
+          </svg>
+        </button>
+
         <!-- Official Navi Brand Icon: Concept 3 (The Wayfinder Spark) -->
         <div class="brand-icon-wrapper">
           <svg class="brand-icon" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -36,15 +44,96 @@
       </div>
 
       <div class="actions">
-        <!-- Sessions Switcher -->
-        <button class="btn" id="btn-sessions" title="Manage saved sessions">
-          <svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-          </svg>
-          <span id="active-session-label">Chats</span>
-        </button>
+        <!-- Provider Switcher: Local Models vs Service Providers -->
+        <div class="provider-dropdown-wrapper" id="provider-dropdown-wrapper">
+          <button type="button" class="btn btn-provider" id="btn-provider-trigger" title="Switch between Local LLMs and Cloud Providers">
+            <span class="provider-status-dot local" id="provider-status-dot"></span>
+            <span class="provider-type-icon" id="provider-icon">💻</span>
+            <span class="provider-label" id="provider-current-name">Ollama (Local)</span>
+            <svg class="ui-icon chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </button>
 
-        <!-- Model combobox: type any model name, or pick one from history -->
+          <div class="provider-menu" id="provider-menu">
+            <!-- Local Group -->
+            <div class="provider-menu-group">
+              <div class="provider-menu-header">
+                <span>💻 Local Runtimes (Free / Offline)</span>
+                <span class="badge-free">$0.00</span>
+              </div>
+              <div class="provider-item" data-provider="ollama" data-type="local">
+                <div class="provider-item-row">
+                  <span class="provider-item-name">Ollama</span>
+                  <span class="provider-item-tag">localhost:11434</span>
+                </div>
+                <div class="provider-item-desc">llama3.2, deepseek-r1, qwen2.5, mistral, phi4</div>
+              </div>
+              <div class="provider-item" data-provider="lmstudio" data-type="local">
+                <div class="provider-item-row">
+                  <span class="provider-item-name">LM Studio</span>
+                  <span class="provider-item-tag">localhost:1234</span>
+                </div>
+                <div class="provider-item-desc">Local models running via LM Studio local server</div>
+              </div>
+              <div class="provider-item" data-provider="llamacpp" data-type="local">
+                <div class="provider-item-row">
+                  <span class="provider-item-name">llama.cpp / LocalAI</span>
+                  <span class="provider-item-tag">localhost:8080</span>
+                </div>
+                <div class="provider-item-desc">Self-hosted llama.cpp server or LocalAI runtime</div>
+              </div>
+            </div>
+
+            <!-- Cloud Service Providers Group -->
+            <div class="provider-menu-group">
+              <div class="provider-menu-header">
+                <span>☁️ Service Providers (Cloud APIs)</span>
+              </div>
+              <div class="provider-item" data-provider="groq" data-type="cloud">
+                <div class="provider-item-row">
+                  <span class="provider-item-name">Groq</span>
+                  <span class="provider-item-tag">Fast LPU</span>
+                </div>
+                <div class="provider-item-desc">llama-3.1-8b-instant, llama-3.3-70b-versatile</div>
+              </div>
+              <div class="provider-item" data-provider="openai" data-type="cloud">
+                <div class="provider-item-row">
+                  <span class="provider-item-name">OpenAI</span>
+                  <span class="provider-item-tag">Official API</span>
+                </div>
+                <div class="provider-item-desc">gpt-4o-mini, gpt-4o, o3-mini</div>
+              </div>
+              <div class="provider-item" data-provider="deepseek" data-type="cloud">
+                <div class="provider-item-row">
+                  <span class="provider-item-name">DeepSeek</span>
+                  <span class="provider-item-tag">DeepSeek API</span>
+                </div>
+                <div class="provider-item-desc">deepseek-chat, deepseek-reasoner</div>
+              </div>
+              <div class="provider-item" data-provider="openrouter" data-type="cloud">
+                <div class="provider-item-row">
+                  <span class="provider-item-name">OpenRouter</span>
+                  <span class="provider-item-tag">Unified Gateway</span>
+                </div>
+                <div class="provider-item-desc">Multi-vendor access (Llama, Claude, Mistral)</div>
+              </div>
+            </div>
+
+            <div class="provider-menu-footer">
+              <button type="button" class="btn-custom-endpoint" id="btn-custom-endpoint">
+                <svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="3"/>
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                </svg>
+                <span>Custom Endpoint URL...</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Model combobox: empty by default; the engine's default model is
+             used behind the scenes until a name is typed here. -->
         <div class="model-combobox-wrapper" id="model-combobox-wrapper">
           <div class="model-input-container">
             <!-- CPU / Model Chip Icon -->
@@ -58,7 +147,7 @@
             </svg>
             <input type="text" id="model-input" class="model-input"
                    placeholder="Type any model name..." autocomplete="off" spellcheck="false"
-                   value="llama-3.1-8b-instant" title="Type a model name and press Enter">
+                   value="" title="Type a model name and press Enter">
             <button type="button" class="btn-combobox-arrow" id="model-trigger" title="Recently used models">
               <svg class="ui-icon chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="6 9 12 15 18 9"/>
@@ -111,54 +200,70 @@
       </div>
     </header>
 
-    <!-- Chat Stream -->
-    <main class="chat-container" id="chat-box">
-      <div class="message system">
-        <div class="bubble">Navi harness initialized. Context window active.</div>
-      </div>
-    </main>
+    <!-- Main Workspace Layout with Left Side Panel -->
+    <div class="main-layout">
+      <!-- Left Side Chat Management Panel (Toggleable) -->
+      <aside class="sessions-sidebar" id="sessions-sidebar">
+        <div class="sidebar-header">
+          <div class="sidebar-title-row">
+            <span class="sidebar-title">Chats</span>
+            <button class="btn-icon" id="btn-collapse-sidebar" title="Hide chats panel">
+              <svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="11 17 6 12 11 7"/>
+                <polyline points="18 17 13 12 18 7"/>
+              </svg>
+            </button>
+          </div>
+          <div class="sidebar-create-row">
+            <input type="text" id="session-new-title" class="sidebar-input" placeholder="New chat title..." autocomplete="off">
+            <button class="btn btn-primary" id="btn-create-session" title="Create session">New</button>
+          </div>
+        </div>
+        <div class="sessions-list" id="sessions-list"></div>
+      </aside>
 
-    <!-- Bottom Input Area -->
-    <footer class="input-panel">
-      <!-- Puppet Mode (Pretend to be AI) Toggle -->
-      <div class="role-selector">
-        <label class="toggle-container" title="When active, you write responses as the AI without making API calls.">
-          <input type="checkbox" id="puppet-mode-toggle">
-          <span class="slider"></span>
-          <span class="toggle-content">
-            <svg class="ui-icon mode-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-              <circle cx="12" cy="7" r="4"/>
-            </svg>
-            <span class="toggle-label" id="role-label">Mode: User</span>
-          </span>
-        </label>
-      </div>
+      <!-- Main Chat Area -->
+      <div class="chat-main-area">
+        <div class="chat-header-bar">
+          <div class="active-session-meta">
+            <div id="active-session-avatar"></div>
+            <span id="active-session-label" class="active-session-title">Chats</span>
+          </div>
+        </div>
 
-      <div class="input-wrapper">
-        <textarea id="prompt-input" rows="1" placeholder="Type a message or press Shift+Enter for newline..."></textarea>
-        <button id="btn-send" class="btn-send" title="Send message">
-          <!-- Send Paper Plane Icon -->
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="22" y1="2" x2="11" y2="13"/>
-            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-          </svg>
-        </button>
-      </div>
-    </footer>
-  </div>
+        <main class="chat-container" id="chat-box">
+          <div class="message system">
+            <div class="bubble">Navi harness initialized. Context window active.</div>
+          </div>
+        </main>
 
-  <!-- Session Manager Modal -->
-  <div class="custom-modal-backdrop" id="sessions-modal">
-    <div class="custom-modal-card sessions-modal-card">
-      <h3>Saved Sessions</h3>
-      <div class="sessions-toolbar">
-        <input type="text" id="session-new-title" class="modal-input" placeholder="New session title..." autocomplete="off">
-        <button class="btn btn-primary" id="btn-create-session">New</button>
-      </div>
-      <div class="sessions-list" id="sessions-list"></div>
-      <div class="modal-actions">
-        <button class="btn" id="btn-close-sessions">Close</button>
+        <footer class="input-panel">
+          <!-- Puppet Mode (Pretend to be AI) Toggle -->
+          <div class="role-selector">
+            <label class="toggle-container" title="When active, you write responses as the AI without making API calls.">
+              <input type="checkbox" id="puppet-mode-toggle">
+              <span class="slider"></span>
+              <span class="toggle-content">
+                <svg class="ui-icon mode-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                  <circle cx="12" cy="7" r="4"/>
+                </svg>
+                <span class="toggle-label" id="role-label">Mode: User</span>
+              </span>
+            </label>
+          </div>
+
+          <div class="input-wrapper">
+            <textarea id="prompt-input" rows="1" placeholder="Type a message or press Shift+Enter for newline..."></textarea>
+            <button id="btn-send" class="btn-send" title="Send message">
+              <!-- Send Paper Plane Icon -->
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="22" y1="2" x2="11" y2="13"/>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+              </svg>
+            </button>
+          </div>
+        </footer>
       </div>
     </div>
   </div>
@@ -170,6 +275,54 @@
       <p id="modal-body">This is a custom dialog.</p>
       <div class="modal-actions" id="modal-actions">
         <button class="btn btn-primary" id="modal-btn-ok">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Custom Endpoint Configuration Modal -->
+  <div class="custom-modal-backdrop" id="endpoint-modal">
+    <div class="custom-modal-card">
+      <h3>Custom API Endpoint</h3>
+      <p>Configure a custom OpenAI-compatible server (e.g. vLLM, remote Ollama, or LAN proxy).</p>
+      <div class="key-modal-body">
+        <label class="modal-label" for="input-custom-endpoint">Base URL</label>
+        <input type="text" id="input-custom-endpoint" class="modal-input" placeholder="http://192.168.1.50:11434/v1" autocomplete="off">
+        <p class="key-hint">Must implement the standard <code>/chat/completions</code> endpoint.</p>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="btn-cancel-endpoint">Cancel</button>
+        <button class="btn btn-primary" id="btn-save-endpoint">Set Endpoint</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dedicated Chat Configuration Modal -->
+  <div class="custom-modal-backdrop" id="chat-settings-modal">
+    <div class="custom-modal-card">
+      <h3 id="chat-settings-title">Configure Chat</h3>
+      <p>Customize the title and model for this conversation.</p>
+
+      <div class="key-modal-body">
+        <label class="modal-label" for="input-chat-title">Chat Name</label>
+        <input type="text" id="input-chat-title" class="modal-input" placeholder="Conversation title..." autocomplete="off">
+
+        <label class="modal-label" for="input-chat-model" style="margin-top: 10px;">Model</label>
+        <input type="text" id="input-chat-model" class="modal-input" placeholder="e.g. llama3.2:1b, gpt-4o-mini, mistral..." autocomplete="off">
+
+        <div class="preset-models-row">
+          <span class="preset-label">Quick select local / cloud:</span>
+          <div class="preset-tags">
+            <button type="button" class="btn-tag" data-model="llama3.2:1b">Ollama llama3.2:1b</button>
+            <button type="button" class="btn-tag" data-model="deepseek-r1:8b">deepseek-r1:8b</button>
+            <button type="button" class="btn-tag" data-model="llama-3.1-8b-instant">Groq llama-3.1-8b</button>
+            <button type="button" class="btn-tag" data-model="gpt-4o-mini">gpt-4o-mini</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn" id="btn-cancel-chat-settings">Cancel</button>
+        <button class="btn btn-primary" id="btn-save-chat-settings">Save Changes</button>
       </div>
     </div>
   </div>
@@ -195,9 +348,7 @@
     </div>
   </div>
 
-  <!-- Custom Toast Notifications Container -->
   <div class="toast-container" id="toast-container"></div>
-
   <script src="app.js"></script>
 </body>
 </html>

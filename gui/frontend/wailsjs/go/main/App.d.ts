@@ -14,6 +14,8 @@ export function DumpContext():Promise<string>;
 
 export function GetAPIKey():Promise<string>;
 
+export function GetActiveProvider():Promise<navi.ProviderInfo>;
+
 export function GetActiveSession():Promise<navi.Session>;
 
 export function GetBaseURL():Promise<string>;
@@ -21,6 +23,8 @@ export function GetBaseURL():Promise<string>;
 export function GetContextText():Promise<string>;
 
 export function GetModelHistory():Promise<Array<string>>;
+
+export function GetProviders():Promise<Array<navi.ProviderInfo>>;
 
 export function GetSessionMessages(arg1:string):Promise<Array<navi.MessageRecord>>;
 
@@ -34,6 +38,8 @@ export function PretendAgent(arg1:string):Promise<boolean>;
 
 export function RenameSession(arg1:string,arg2:string):Promise<boolean>;
 
+export function UpdateSession(arg1:string,arg2:string,arg3:string):Promise<boolean>;
+
 export function ResetHistory():Promise<boolean>;
 
 export function SaveModelHistory(arg1:string):Promise<boolean>;
@@ -45,3 +51,5 @@ export function SetBaseURL(arg1:string):Promise<boolean>;
 export function SetModel(arg1:string):Promise<boolean>;
 
 export function SwitchSession(arg1:string):Promise<navi.Session>;
+
+export function SwitchProvider(arg1:string):Promise<navi.ProviderInfo>;
