@@ -32,6 +32,9 @@ dirs:
             - go
             - css
             - ts
+            # The Wayfinder Spark brand icon (assets/) is SVG text, so it is
+            # allowed here rather than force-listed in include.
+            - svg
     cmd:
         enabled: true
         extensions:
