@@ -8,6 +8,7 @@
 #   ./install.sh --system        install to /usr/local/bin (needs sudo on the install step)
 #   ./install.sh --prefix DIR    install to DIR
 #   ./install.sh --uninstall     remove an existing install from the target dir
+#   ./install.sh --no-path       don't edit your shell rc file
 #   ./install.sh --help          show this help
 #
 # The CLI is always required. The GUI needs cgo + GTK/WebKit system libraries.
@@ -15,6 +16,11 @@
 # you want. Non-interactive runs (CI, pipes) skip the prompt and build the GUI
 # best-effort: if the toolchain or libs are missing, the GUI is dropped with a
 # warning and the CLI still installs.
+#
+# Unless --no-path is given, the install directory is added to your shell rc
+# file (~/.bashrc, ~/.zshrc or config.fish) inside a marker-delimited block.
+# The file is backed up to <rc>.bak first, the block is rewritten rather than
+# duplicated on reinstall, and --uninstall removes it.
 
 set -euo pipefail
 
@@ -31,6 +37,7 @@ TARGET_PREFIX="$HOME/.local/bin"
 GUI_MODE="auto"
 WANT_GUI=1
 UNINSTALL=0
+SKIP_RC=0
 
 # ---------------------------------------------------------------- output ----
 
@@ -101,6 +108,7 @@ while [ $# -gt 0 ]; do
     --prefix=*)   TARGET_PREFIX="${1#--prefix=}" ;;
     --no-gui)     GUI_MODE="no" ;;
     --with-gui)   GUI_MODE="yes" ;;
+    --no-path)    SKIP_RC=1 ;;
     --uninstall)  UNINSTALL=1 ;;
     -h|--help)    usage ;;
     *)            die "unknown option: $1 (try --help)" ;;
@@ -109,6 +117,91 @@ while [ $# -gt 0 ]; do
 done
 
 # ------------------------------------------------------------ uninstall ----
+
+# Resolve the invoking user's home and shell. Under sudo, $HOME is /root and
+# $SHELL is root's shell, so follow SUDO_USER to edit the right person's rc.
+REAL_HOME="$HOME"
+REAL_SHELL="${SHELL:-bash}"
+if [ -n "${SUDO_USER:-}" ]; then
+  _pw="$(getent passwd "$SUDO_USER" 2>/dev/null || true)"
+  if [ -n "$_pw" ]; then
+    REAL_HOME="$(printf '%s' "$_pw" | cut -d: -f6)"
+    REAL_SHELL="$(printf '%s' "$_pw" | cut -d: -f7)"
+  fi
+fi
+
+# The rc file we manage, chosen by the invoking user's login shell.
+shell_rc_file() {
+  case "$(basename "$REAL_SHELL")" in
+    fish) printf '%s\n' "${REAL_HOME}/.config/fish/config.fish" ;;
+    zsh)  printf '%s\n' "${REAL_HOME}/.zshrc" ;;
+    *)    printf '%s\n' "${REAL_HOME}/.bashrc" ;;
+  esac
+}
+
+# Insert or refresh a marker-delimited PATH block in the shell rc file.
+# A blind `>> ~/.bashrc` would duplicate on every reinstall and be impossible
+# to cleanly remove, so the block is bounded by markers and rewritten in place.
+# Returns 0 on write, 2 if the prefix is already resolvable.
+add_shell_path() {
+  local rc_file="$1" prefix="$2"
+  local begin="# >>> navi PATH >>>" end="# <<< navi PATH <<<" line tmp rc_dir
+
+  case "$rc_file" in
+    */config.fish) line="fish_add_path $prefix" ;;
+    *)             line="export PATH=\"$prefix:\$PATH\"" ;;
+  esac
+
+  # Nothing to do if the prefix is already resolvable.
+  case ":$PATH:" in
+    *":$prefix:"*) return 2 ;;
+  esac
+
+  rc_dir="$(dirname "$rc_file")"
+  [ -d "$rc_dir" ] || mkdir -p "$rc_dir" 2>/dev/null || return 1
+
+  # Back up before the first edit. Never overwrite an existing backup: it may
+  # predate this installer and be more valuable than today's copy.
+  if [ -f "$rc_file" ] && [ ! -e "$rc_file.bak" ]; then
+    cp "$rc_file" "$rc_file.bak" || return 1
+  fi
+
+  if [ -f "$rc_file" ] && grep -qF "$begin" "$rc_file"; then
+    # Block already present (reinstall, or a different --prefix): rewrite it
+    # between the markers instead of appending a second copy.
+    tmp="$(mktemp)" || return 1
+    awk -v b="$begin" -v e="$end" -v l="$line" '
+      $0 == b { print b; print l; skip = 1; next }
+      $0 == e { skip = 0; print e; next }
+      !skip { print }
+    ' "$rc_file" > "$tmp" || { rm -f "$tmp"; return 1; }
+    cat "$tmp" > "$rc_file" || { rm -f "$tmp"; return 1; }
+    rm -f "$tmp"
+  else
+    # New block. Terminate a trailing line first so we never glue onto a file
+    # whose last line lacks a newline.
+    [ -s "$rc_file" ] && [ -n "$(tail -c1 "$rc_file")" ] && printf '\n' >> "$rc_file"
+    printf '%s\n%s\n%s\n' "$begin" "$line" "$end" >> "$rc_file"
+  fi
+  return 0
+}
+
+# Remove our block again (used by --uninstall). Leaves everything else intact.
+remove_shell_path() {
+  local rc_file="$1" tmp
+  local begin="# >>> navi PATH >>>" end="# <<< navi PATH <<<"
+  [ -f "$rc_file" ] || return 0
+  grep -qF "$begin" "$rc_file" || return 0
+
+  tmp="$(mktemp)" || return 1
+  awk -v b="$begin" -v e="$end" '
+    $0 == b { skip = 1; next }
+    $0 == e { skip = 0; next }
+    !skip { print }
+  ' "$rc_file" > "$tmp" || { rm -f "$tmp"; return 1; }
+  cat "$tmp" > "$rc_file" || { rm -f "$tmp"; return 1; }
+  rm -f "$tmp"
+}
 
 if [ "$UNINSTALL" -eq 1 ]; then
   info "Uninstalling from $TARGET_PREFIX"
@@ -120,7 +213,16 @@ if [ "$UNINSTALL" -eq 1 ]; then
       removed=1
     fi
   done
-  [ "$removed" -eq 1 ] || info "Nothing to remove."
+
+  # Drop the PATH block we added, so the rc file is left as we found it.
+  RC_FILE="$(shell_rc_file)"
+  if remove_shell_path "$RC_FILE"; then
+    [ -f "$RC_FILE" ] && step "removed PATH block from $RC_FILE"
+  else
+    warn "could not clean $RC_FILE; remove the '# >>> navi PATH >>>' block manually."
+  fi
+
+  [ "$removed" -eq 1 ] || info "No binaries to remove."
   exit 0
 fi
 
@@ -304,22 +406,20 @@ fi
 
 # ----------------------------------------------------------------- PATH ----
 
-case ":$PATH:" in
-  *":$TARGET_PREFIX:"*) ;;
-  *)
-    warn "$TARGET_PREFIX is not on your PATH."
-    case "$SHELL" in
-      */zsh)   rc="~/.zshrc" ;;
-      */fish)  rc="~/.config/fish/config.fish" ;;
-      *)       rc="~/.bashrc" ;;
-    esac
-    if [ "$rc" = "~/.config/fish/config.fish" ]; then
-      printf '    Add it with:  set -U fish_user_paths %s \$fish_user_paths\n' "$TARGET_PREFIX"
-    else
-      printf "    Add it with:  echo 'export PATH=\"%s:\$PATH\"' >> %s\n" "$TARGET_PREFIX" "$rc"
-    fi
-    ;;
-esac
+if [ "$SKIP_RC" -eq 1 ]; then
+  case ":$PATH:" in
+    *":$TARGET_PREFIX:"*) step "path:     $TARGET_PREFIX already on PATH" ;;
+    *)                    step "path:     skipped (--no-path); add $TARGET_PREFIX to PATH yourself" ;;
+  esac
+else
+  RC_FILE="$(shell_rc_file)"
+  add_shell_path "$RC_FILE" "$TARGET_PREFIX"
+  case $? in
+    0)  step "path:     added $TARGET_PREFIX to $RC_FILE (backup: $RC_FILE.bak)" ;;
+    2)  step "path:     $TARGET_PREFIX already on PATH" ;;
+    *)  warn "could not update $RC_FILE; add $TARGET_PREFIX to PATH manually." ;;
+  esac
+fi
 
 # ---------------------------------------------------------------- summary --
 
