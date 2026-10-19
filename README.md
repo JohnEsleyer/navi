@@ -63,12 +63,12 @@ Launch directly from the CLI with `/gui`, run independently with plain Go, or us
 
 ```bash
 # Production build without the Wails CLI (assets are embedded)
-go build -tags production ./cmd/navi-gui
+go build -tags production ./gui
 
 # Or use the Wails CLI (hot-reload dev server / packaged build)
-cd cmd/navi-gui
+cd gui
 wails dev      # development with hot reload
-wails build    # production binary → cmd/navi-gui/build/bin/navi-gui
+wails build    # production binary → gui/build/bin/navi-gui
 ```
 
 ### GUI Features

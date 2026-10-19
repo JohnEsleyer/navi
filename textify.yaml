@@ -38,7 +38,16 @@ dirs:
             - css
             - ts
             - json
-    cmd/navi-gui/build:
+    gui:
+        enabled: true
+        extensions:
+            - go
+            - js
+            - html
+            - css
+            - ts
+            - json
+    gui/build:
         enabled: false
     pkg:
         enabled: true

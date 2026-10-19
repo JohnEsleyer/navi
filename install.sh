@@ -395,7 +395,7 @@ if [ "$WANT_GUI" -eq 1 ]; then
   # only returns "Wails applications will not build without the correct build
   # tags." The binary still links and the build looks successful - the failure
   # surfaces only at launch, which makes a missing tag easy to miss.
-  if GOFLAGS="-trimpath" go build -tags production -o "$WORKDIR/$GUI_NAME" ./cmd/navi-gui 2>"$WORKDIR/gui-build.log"; then
+  if GOFLAGS="-trimpath" go build -tags production -o "$WORKDIR/$GUI_NAME" ./gui 2>"$WORKDIR/gui-build.log"; then
     step "ok: $WORKDIR/$GUI_NAME"
 
     # Compiling is not the same as running. Verify it actually starts, so a

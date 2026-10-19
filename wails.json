@@ -2,7 +2,7 @@
   "$schema": "https://wails.io/schemas/config.v2.json",
   "name": "navi",
   "outputfilename": "navi-gui",
-  "frontend:dir": "cmd/navi-gui/frontend",
+  "frontend:dir": "gui/frontend",
   "author": {
     "name": "Navi"
   }

@@ -257,12 +257,12 @@ func guiCommand(engine *navi.Engine) (*exec.Cmd, string) {
 		fmt.Printf("%s⚠ No navi-gui binary found and module root unresolved (%v); trying current directory.%s\n",
 			ColorYellow, err, ColorReset)
 	} else {
-		cmd := exec.Command("go", "run", "-tags", "production", "./cmd/navi-gui")
+		cmd := exec.Command("go", "run", "-tags", "production", "./gui")
 		cmd.Dir = root
 		return cmd, "go run @ " + root
 	}
 
-	return exec.Command("go", "run", "-tags", "production", "./cmd/navi-gui"), "go run @ ."
+	return exec.Command("go", "run", "-tags", "production", "./gui"), "go run @ ."
 }
 
 // findGUIBinary looks for a prebuilt navi-gui next to the running executable
