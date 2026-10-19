@@ -14,6 +14,13 @@ const btnCopyContext = document.getElementById("btn-copy-context");
 const btnDumpContext = document.getElementById("btn-dump-context");
 const btnClearContext = document.getElementById("btn-clear-context");
 
+// Vector Icon for Cache Hits
+const svgBolt = `
+  <svg class="meta-icon cache" viewBox="0 0 24 24">
+    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+  </svg>
+`;
+
 // --- Custom Modal Helper ---
 function showCustomDialog(title, message, isConfirm = false) {
   return new Promise((resolve) => {
@@ -35,8 +42,10 @@ function showCustomDialog(title, message, isConfirm = false) {
     }
 
     const okBtn = document.createElement("button");
-    okBtn.className = "btn btn-primary";
-    okBtn.innerText = "OK";
+    okBtn.className = "btn";
+    okBtn.style.background = "var(--accent-cyan)";
+    okBtn.style.color = "#000";
+    okBtn.innerText = "Confirm";
     okBtn.onclick = () => { modal.style.display = "none"; resolve(true); };
     actions.appendChild(okBtn);
 
@@ -50,11 +59,12 @@ function showToast(message) {
   toast.className = "toast";
   toast.innerText = message;
   container.appendChild(toast);
-  setTimeout(() => toast.remove(), 3500);
+  setTimeout(() => toast.remove(), 3200);
 }
 
-// --- Dropdown Management ---
+// --- Custom Dropdown Handlers ---
 modelTrigger.addEventListener("click", () => modelMenu.classList.toggle("active"));
+
 document.addEventListener("click", (e) => {
   if (!modelTrigger.contains(e.target) && !modelMenu.contains(e.target)) {
     modelMenu.classList.remove("active");
@@ -69,16 +79,16 @@ document.querySelectorAll(".dropdown-item").forEach((item) => {
     if (window.go && window.go.main && window.go.main.App) {
       await window.go.main.App.SetModel(val);
     }
-    showToast(`Switched model to ${val}`);
+    showToast(`Model set to: ${val}`);
   });
 });
 
-// --- Puppet Mode (Pretend to be AI) ---
+// --- Mode Toggle (Puppet / User) ---
 puppetToggle.addEventListener("change", (e) => {
   if (e.target.checked) {
-    roleLabel.innerText = "Mode: Pretend AI (Puppet)";
+    roleLabel.innerText = "Mode: Puppet (AI)";
     roleLabel.style.color = "var(--accent-purple)";
-    promptInput.placeholder = "Type as AI agent (will be added without API call)...";
+    promptInput.placeholder = "Write response as the AI agent (direct context injection)...";
   } else {
     roleLabel.innerText = "Mode: User";
     roleLabel.style.color = "var(--text-muted)";
@@ -86,7 +96,7 @@ puppetToggle.addEventListener("change", (e) => {
   }
 });
 
-// --- Message Sending ---
+// --- Message Sending Logic ---
 async function handleSend() {
   const text = promptInput.value.trim();
   if (!text) return;
@@ -95,25 +105,24 @@ async function handleSend() {
   const isPuppet = puppetToggle.checked;
 
   if (isPuppet) {
-    // Human is pretending to be the AI
-    appendBubble("assistant", text, "[Injected Manually - $0.00]", true);
+    // Injected manually by human
+    appendBubble("assistant", text, "Injected Manually · $0.00", true);
     if (window.go && window.go.main && window.go.main.App) {
       await window.go.main.App.PretendAgent(text);
     }
-    showToast("Injected response into context buffer");
+    showToast("Assistant completion injected into context");
     return;
   }
 
-  // Normal user question
+  // Normal human query
   appendBubble("user", text);
 
-  // Call Wails Backend
   if (window.go && window.go.main && window.go.main.App) {
     try {
       const res = await window.go.main.App.Ask(text);
       const meta = res.meta.cached
-        ? "⚡ CACHE HIT | $0.000000"
-        : `In: ${res.meta.prompt_tokens} Out: ${res.meta.output_tokens} | Turn: $${res.meta.turn_cost.toFixed(6)}`;
+        ? `${svgBolt} CACHE HIT · $0.000000`
+        : `In: ${res.meta.prompt_tokens} Out: ${res.meta.output_tokens} · Turn: $${res.meta.turn_cost.toFixed(6)}`;
 
       appendBubble("assistant", res.text, meta);
       statsCost.innerText = `$${res.meta.session_cost.toFixed(6)}`;
@@ -123,7 +132,7 @@ async function handleSend() {
   }
 }
 
-function appendBubble(role, content, metaText = "", isPuppet = false) {
+function appendBubble(role, content, metaHtml = "", isPuppet = false) {
   const msg = document.createElement("div");
   msg.className = `message ${role} ${isPuppet ? "puppet" : ""}`;
 
@@ -132,13 +141,13 @@ function appendBubble(role, content, metaText = "", isPuppet = false) {
   bubble.innerText = content;
   msg.appendChild(bubble);
 
-  if (metaText) {
+  if (metaHtml) {
     const meta = document.createElement("div");
     meta.className = "meta-info";
     if (isPuppet) {
-      meta.innerHTML = `<span class="puppet-badge">PUPPET</span>${metaText}`;
+      meta.innerHTML = `<span class="puppet-badge">PUPPET</span>${metaHtml}`;
     } else {
-      meta.innerText = metaText;
+      meta.innerHTML = metaHtml;
     }
     msg.appendChild(meta);
   }
@@ -160,7 +169,7 @@ btnCopyContext.addEventListener("click", async () => {
   if (window.go && window.go.main && window.go.main.App) {
     const contextText = await window.go.main.App.GetContextText();
     await navigator.clipboard.writeText(contextText);
-    showToast("Context window copied to clipboard!");
+    showToast("Context window copied to clipboard");
   }
 });
 
@@ -168,18 +177,22 @@ btnDumpContext.addEventListener("click", async () => {
   if (window.go && window.go.main && window.go.main.App) {
     try {
       const path = await window.go.main.App.DumpContext();
-      await showCustomDialog("Context Dumped", `Context successfully written to current working directory:\n\n${path}`);
+      await showCustomDialog("Context Dumped", `Context successfully written to:\n\n${path}`);
     } catch (err) {
-      await showCustomDialog("Error", `Failed to dump context: ${err}`);
+      await showCustomDialog("Dump Error", `Could not write file: ${err}`);
     }
   }
 });
 
 btnClearContext.addEventListener("click", async () => {
-  const confirmed = await showCustomDialog("Clear Memory?", "This will wipe the current context window and reset input tokens.", true);
+  const confirmed = await showCustomDialog(
+    "Reset Context?",
+    "This will clear the current conversation memory and reset input tokens.",
+    true
+  );
   if (confirmed && window.go && window.go.main && window.go.main.App) {
     await window.go.main.App.ResetHistory();
     chatBox.innerHTML = '<div class="message system"><div class="bubble">Context window cleared.</div></div>';
-    showToast("Memory reset to zero.");
+    showToast("Memory reset to zero");
   }
 });
