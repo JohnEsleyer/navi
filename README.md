@@ -29,8 +29,9 @@ cd navi
 ./install.sh
 ```
 
-This builds and installs `navi` to `~/.local/bin`, plus `navi-gui` if your
-system has the required GUI libraries. Then:
+This builds and installs `navi` to `~/.local/bin`. On a terminal you are then
+asked whether to include the desktop GUI; non-interactive runs (CI, pipes)
+build it best-effort instead of prompting. Then:
 
 ```bash
 export NAVI_API_KEY=your_key_here
@@ -39,14 +40,16 @@ navi
 
 | Flag | Effect |
 |---|---|
+| `--with-gui` | Include the desktop GUI |
+| `--no-gui` | Skip the desktop GUI |
 | `--prefix DIR` | Install to `DIR` instead of `~/.local/bin` |
 | `--system` | Install to `/usr/local/bin` |
-| `--no-gui` | Skip the desktop GUI |
 | `--uninstall` | Remove `navi` and `navi-gui` from the target directory |
 | `--help` | Usage |
 
-The GUI is built best-effort: it needs cgo plus GTK/WebKit headers. If those
-are missing the installer warns and installs the CLI only. On Debian/Ubuntu:
+The GUI needs cgo plus GTK/WebKit headers. The installer probes for them
+before asking, so the prompt warns up front if they are absent, and a failed
+GUI build never blocks the CLI. On Debian/Ubuntu:
 
 ```bash
 sudo apt install build-essential libgtk-3-dev libwebkit2gtk-4.1-dev

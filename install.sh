@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 #
-# install.sh - build and install the Navi CLI (and desktop GUI, if possible).
+# install.sh - build and install the Navi CLI (and desktop GUI, if wanted).
 #
-#   ./install.sh                 install to ~/.local/bin (no sudo needed)
+#   ./install.sh                 install to ~/.local/bin (asks about the GUI)
+#   ./install.sh --with-gui      include the desktop GUI
+#   ./install.sh --no-gui        skip the desktop GUI
 #   ./install.sh --system        install to /usr/local/bin (needs sudo on the install step)
 #   ./install.sh --prefix DIR    install to DIR
 #   ./install.sh --uninstall     remove an existing install from the target dir
-#   ./install.sh --no-gui        skip building the desktop GUI
 #   ./install.sh --help          show this help
 #
-# The CLI is always required. The GUI needs cgo + GTK/WebKit system libraries,
-# so its build is best-effort: if the toolchain or libs are missing, the GUI is
-# skipped with a warning and the CLI still installs.
+# The CLI is always required. The GUI needs cgo + GTK/WebKit system libraries.
+# With neither --with-gui nor --no-gui, and on a terminal, you are asked which
+# you want. Non-interactive runs (CI, pipes) skip the prompt and build the GUI
+# best-effort: if the toolchain or libs are missing, the GUI is dropped with a
+# warning and the CLI still installs.
 
 set -euo pipefail
 
@@ -23,6 +26,9 @@ GUI_NAME="navi-gui"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 TARGET_PREFIX="$HOME/.local/bin"
+# GUI_MODE: "auto" = ask when on a terminal, otherwise build best-effort.
+#           "yes" / "no" = forced by --with-gui / --no-gui.
+GUI_MODE="auto"
 WANT_GUI=1
 UNINSTALL=0
 
@@ -41,8 +47,49 @@ warn()  { printf '%s\n' "${C_YELLOW}warning:${C_RESET} $*" >&2; }
 die()   { printf '%s\n' "${C_RED}error:${C_RESET} $*" >&2; exit 1; }
 
 usage() {
-  sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  # Print the leading comment block (everything after the shebang up to the
+  # first non-comment line), so editing the header can't desync this.
+  awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"
   exit 0
+}
+
+# GUI dependency probe, used to make the interactive choice informative.
+# Prints the missing package names; empty output means the libs are present.
+gui_missing_deps() {
+  command -v pkg-config >/dev/null 2>&1 || { echo "pkg-config"; return; }
+  command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1 || echo "build-essential"
+  pkg-config --exists webkit2gtk-4.1 2>/dev/null && return
+  pkg-config --exists webkit2gtk-4.0 2>/dev/null && return
+  echo "libwebkit2gtk-4.1-dev"
+  pkg-config --exists gtk+-3.0 2>/dev/null || echo "libgtk-3-dev"
+}
+
+# Resolve the GUI choice once we know whether we're on a terminal.
+resolve_gui_choice() {
+  case "$GUI_MODE" in
+    yes) WANT_GUI=1; return ;;
+    no)  WANT_GUI=0; return ;;
+  esac
+
+  # Not forced: ask only if both stdin and stdout are a terminal.
+  if [ ! -t 0 ] || [ ! -t 1 ]; then
+    WANT_GUI=1
+    step "gui:      building best-effort (non-interactive)"
+    return
+  fi
+
+  MISSING="$(gui_missing_deps)"
+  if [ -n "$MISSING" ]; then
+    printf '%s\n' "${C_YELLOW}The desktop GUI needs system libraries you don't have:${C_RESET} $MISSING"
+    printf '    Debian/Ubuntu:  sudo apt install build-essential libgtk-3-dev libwebkit2gtk-4.1-dev\n'
+  fi
+
+  printf 'Include the desktop GUI? [%sY/n%s] ' "$C_BOLD" "$C_RESET"
+  read -r reply || reply=""
+  case "$reply" in
+    [Nn]*) WANT_GUI=0 ;;
+    *)     WANT_GUI=1 ;;
+  esac
 }
 
 # ----------------------------------------------------------------- args ----
@@ -52,7 +99,8 @@ while [ $# -gt 0 ]; do
     --system)     TARGET_PREFIX="/usr/local/bin" ;;
     --prefix)     shift; [ $# -gt 0 ] || die "--prefix requires a directory"; TARGET_PREFIX="$1" ;;
     --prefix=*)   TARGET_PREFIX="${1#--prefix=}" ;;
-    --no-gui)     WANT_GUI=0 ;;
+    --no-gui)     GUI_MODE="no" ;;
+    --with-gui)   GUI_MODE="yes" ;;
     --uninstall)  UNINSTALL=1 ;;
     -h|--help)    usage ;;
     *)            die "unknown option: $1 (try --help)" ;;
@@ -100,6 +148,15 @@ if command -v git >/dev/null 2>&1 && git -C "$REPO_ROOT" rev-parse --git-dir >/d
   [ -n "$VERSION" ] && step "version:  $VERSION"
 fi
 
+# Decide whether to build the GUI, prompting first if we're on a terminal and
+# the user didn't force it with --with-gui / --no-gui.
+resolve_gui_choice
+if [ "$WANT_GUI" -eq 1 ]; then
+  step "gui:      yes"
+else
+  step "gui:      no"
+fi
+
 # ---------------------------------------------------------------- build ----
 
 WORKDIR="$(mktemp -d)"
@@ -126,7 +183,11 @@ if [ "$WANT_GUI" -eq 1 ]; then
     fi
   fi
 else
-  step "skipped (--no-gui)"
+  if [ "$GUI_MODE" = "no" ]; then
+    step "skipped (--no-gui)"
+  else
+    step "skipped (not selected)"
+  fi
 fi
 
 # -------------------------------------------------------------- install ----
