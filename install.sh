@@ -31,7 +31,26 @@ GUI_NAME="navi-gui"
 # Resolve repo root from this script's location, so it works from anywhere.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-TARGET_PREFIX="$HOME/.local/bin"
+# Resolve the invoking user's real home and login shell. Under sudo, $HOME is
+# /root and $SHELL is root's shell, so everything derived from them - the
+# default install prefix and the rc file to edit - would target root instead of
+# the person running the installer. Follow SUDO_USER to get the right values.
+# This has to happen before TARGET_PREFIX is defaulted, or `sudo ./install.sh`
+# silently installs to /root/.local/bin, a directory the user cannot read.
+REAL_HOME="$HOME"
+REAL_SHELL="${SHELL:-bash}"
+if [ -n "${SUDO_USER:-}" ]; then
+  _pw="$(getent passwd "$SUDO_USER" 2>/dev/null || true)"
+  if [ -n "$_pw" ]; then
+    REAL_HOME="$(printf '%s' "$_pw" | cut -d: -f6)"
+    REAL_SHELL="$(printf '%s' "$_pw" | cut -d: -f7)"
+  fi
+fi
+
+# Default to the invoking user's home rather than $HOME: under sudo $HOME is
+# /root, and installing there would put navi somewhere the user cannot execute
+# it from. An explicit --prefix or --system still wins.
+TARGET_PREFIX="$REAL_HOME/.local/bin"
 # GUI_MODE: "auto" = ask when on a terminal, otherwise build best-effort.
 #           "yes" / "no" = forced by --with-gui / --no-gui.
 GUI_MODE="auto"
@@ -117,18 +136,6 @@ while [ $# -gt 0 ]; do
 done
 
 # ------------------------------------------------------------ uninstall ----
-
-# Resolve the invoking user's home and shell. Under sudo, $HOME is /root and
-# $SHELL is root's shell, so follow SUDO_USER to edit the right person's rc.
-REAL_HOME="$HOME"
-REAL_SHELL="${SHELL:-bash}"
-if [ -n "${SUDO_USER:-}" ]; then
-  _pw="$(getent passwd "$SUDO_USER" 2>/dev/null || true)"
-  if [ -n "$_pw" ]; then
-    REAL_HOME="$(printf '%s' "$_pw" | cut -d: -f6)"
-    REAL_SHELL="$(printf '%s' "$_pw" | cut -d: -f7)"
-  fi
-fi
 
 # The rc file we manage, chosen by the invoking user's login shell.
 shell_rc_file() {
@@ -387,6 +394,18 @@ step "installed $TARGET_PREFIX/$BIN_NAME"
 if [ "$BUILT_GUI" -eq 1 ]; then
   install -m 0755 "$WORKDIR/$GUI_NAME" "$TARGET_PREFIX/$GUI_NAME"
   step "installed $TARGET_PREFIX/$GUI_NAME"
+fi
+
+# Under sudo the binaries land owned by root. Inside the invoking user's home
+# that is a nuisance: the next plain ./install.sh cannot overwrite them, so the
+# user would be forced to keep using sudo forever. Hand ownership back.
+if [ -n "${SUDO_USER:-}" ]; then
+  if chown "$SUDO_USER" "$TARGET_PREFIX/$BIN_NAME" 2>/dev/null; then
+    [ "$BUILT_GUI" -eq 1 ] && chown "$SUDO_USER" "$TARGET_PREFIX/$GUI_NAME" 2>/dev/null || true
+    case "$TARGET_PREFIX" in
+      "$REAL_HOME"/*) step "owner:    set to $SUDO_USER (avoids needing sudo again)" ;;
+    esac
+  fi
 fi
 
 # ---------------------------------------------------------------- verify ---
