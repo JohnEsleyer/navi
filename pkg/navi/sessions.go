@@ -114,7 +114,9 @@ func (e *Engine) SwitchSession(id string) (*Session, error) {
 	e.ClearCache()
 
 	if sess.Model != "" && sess.Model != e.model() {
-		e.SetModel(sess.Model)
+		// Adopting the conversation's model must not overwrite the model the
+		// user picked for the app, so this switch is not persisted.
+		e.setModel(sess.Model, false)
 	}
 
 	copied := *sess

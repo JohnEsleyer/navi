@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/wailsapp/wails/v2/pkg/runtime"
+
 	"navi/pkg/navi"
 )
 
@@ -22,10 +24,10 @@ func NewApp() *App {
 	// BaseURL is deliberately not defaulted. navi.New picks the endpoint from
 	// the model via the provider registry, so forcing one here would pin it
 	// and break switching models across providers.
-	if model == "" {
-		model = "llama-3.1-8b-instant"
-	}
-
+	//
+	// The model is not defaulted either: navi.New falls back to the model
+	// persisted by the last run, and only then to its own default. Defaulting
+	// it here would make the saved choice unreachable.
 	engine := navi.New(navi.Config{
 		BaseURL:    baseURL,
 		APIKey:     apiKey,
@@ -85,7 +87,7 @@ func (a *App) handleCommand(input string) *navi.Result {
 
 	case "key":
 		if args == "" {
-			return a.localResult(fmt.Sprintf("Active API Key: %s\nEndpoint: %s\nUse /key <api_key> to update. Keys are per-session and never written to disk.",
+			return a.localResult(fmt.Sprintf("Active API Key: %s\nEndpoint: %s\nUse /key <api_key> to update. The key is saved to the Navi config directory so it survives a restart.",
 				a.engine.MaskedAPIKey(), a.engine.GetBaseURL()))
 		}
 		a.engine.SetAPIKey(args)
@@ -197,6 +199,118 @@ func (a *App) Ask(prompt string) (*navi.Result, error) {
 	return a.engine.Ask(ctx, prompt)
 }
 
+// --- Actions: live execution harness ---
+//
+// The streaming path replaces Ask's one-shot reply for the GUI. Interception
+// progress reaches the frontend as Wails events carrying single tokens (and
+// the action banners), so the bubble types out live instead of appearing
+// wholesale when the whole turn finally lands.
+
+// GetActions lists all registered actions (built-in first) for the
+// management view. Non-nil so the frontend iterates safely.
+func (a *App) GetActions() []navi.Action {
+	list := a.engine.ActionManager().ListActions()
+	if list == nil {
+		return []navi.Action{}
+	}
+	return list
+}
+
+// SaveAction creates a user-defined action or edits an existing one. The
+// context window is refreshed afterwards, so the model learns about the new
+// action immediately instead of only on the next launch.
+func (a *App) SaveAction(act navi.Action) navi.Action {
+	saved := a.engine.ActionManager().SaveAction(act)
+	a.engine.SyncSystemPrompt()
+	return saved
+}
+
+func (a *App) DeleteAction(id string) bool {
+	if err := a.engine.ActionManager().DeleteAction(id); err != nil {
+		return false
+	}
+	a.engine.SyncSystemPrompt()
+	return true
+}
+
+func (a *App) ToggleAction(id string, enabled bool) bool {
+	if err := a.engine.ActionManager().ToggleAction(id, enabled); err != nil {
+		return false
+	}
+	a.engine.SyncSystemPrompt()
+	return true
+}
+
+// SetActionsEnabled flips the master switch. When off, no tag is executed and
+// a system notice is injected into the model's context so it stops emitting
+// action tags.
+func (a *App) SetActionsEnabled(enabled bool) bool {
+	a.engine.ActionManager().SetActionsEnabled(enabled)
+	a.engine.SyncSystemPrompt()
+	return true
+}
+
+func (a *App) GetActionsEnabled() bool {
+	return a.engine.ActionManager().IsActionsEnabled()
+}
+
+// emitEvents is a nil-safe wrapper around runtime.EventsEmit: before
+// OnStartup fires there is no Wails context and emitting would panic.
+func (a *App) emitEvents(name string, data ...interface{}) {
+	if a.ctx == nil {
+		return
+	}
+	runtime.EventsEmit(a.ctx, name, data...)
+}
+
+// AskStream starts the live streaming turn. It returns immediately and
+// reports progress through the stream:* events; the GUI assembles bubble text
+// and action banners from those tokens as they arrive.
+func (a *App) AskStream(prompt string) bool {
+	// Slash commands remain harness work, not LLM work: resolve them locally
+	// and hand the result straight to the completion event so the frontend's
+	// streaming flow finishes exactly like a streamed turn would.
+	if res := a.handleCommand(prompt); res != nil {
+		a.emitEvents("stream:complete", res)
+		return true
+	}
+
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	go func() {
+		_, err := a.engine.AskStream(ctx, prompt, navi.StreamCallbacks{
+			OnToken: func(token string) {
+				a.emitEvents("stream:token", token)
+			},
+			OnActionStart: func(tag, command string) {
+				a.emitEvents("stream:action_start", map[string]string{
+					"tag":     tag,
+					"command": command,
+				})
+			},
+			OnActionResult: func(tag, output string) {
+				a.emitEvents("stream:action_result", map[string]string{
+					"tag":    tag,
+					"output": output,
+				})
+			},
+			OnComplete: func(res *navi.Result) {
+				a.emitEvents("stream:complete", res)
+			},
+			OnError: func(err error) {
+				a.emitEvents("stream:error", err.Error())
+			},
+		})
+		if err != nil {
+			a.emitEvents("stream:error", err.Error())
+		}
+	}()
+	return true
+}
+
 // Puppet Mode: Human acts as AI agent
 func (a *App) PretendAgent(content string) bool {
 	a.engine.InjectAssistantMessage(content)
@@ -223,6 +337,17 @@ func (a *App) SetModel(model string) bool {
 
 func (a *App) GetStats() navi.Stats {
 	return a.engine.GetStats()
+}
+
+// GetWorkingDir returns the process working directory. It is where the
+// action commands run and what the chat header shows next to the session
+// name, so the user always knows which tree the agent is working in.
+func (a *App) GetWorkingDir() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return dir
 }
 
 // --- API key & endpoint management ---

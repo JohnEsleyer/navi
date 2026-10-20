@@ -26,6 +26,30 @@ const btnCopyContext = document.getElementById("btn-copy-context");
 const btnDumpContext = document.getElementById("btn-dump-context");
 const btnClearContext = document.getElementById("btn-clear-context");
 
+// --- Actions Management & Real-time Live Interception ---
+const btnMoreMenu = document.getElementById("btn-more-menu");
+const moreDropdownMenu = document.getElementById("more-dropdown-menu");
+const btnNavActions = document.getElementById("btn-nav-actions");
+const btnNavChat = document.getElementById("btn-nav-chat");
+const btnBackToChat = document.getElementById("btn-back-to-chat");
+
+const viewChat = document.getElementById("view-chat");
+const viewActions = document.getElementById("view-actions");
+const actionsCardsContainer = document.getElementById("actions-cards-container");
+const btnOpenCreateAction = document.getElementById("btn-open-create-action");
+
+const actionEditorModal = document.getElementById("action-editor-modal");
+const actionModalTitle = document.getElementById("action-modal-title");
+const inputActionTag = document.getElementById("input-action-tag");
+const inputActionDesc = document.getElementById("input-action-desc");
+const inputActionCmd = document.getElementById("input-action-cmd");
+const inputActionParam = document.getElementById("input-action-param");
+const btnSaveAction = document.getElementById("btn-save-action");
+const btnCancelActionEdit = document.getElementById("btn-cancel-action-edit");
+
+const actionsMasterToggle = document.getElementById("actions-master-toggle");
+const actionsToggleLabel = document.getElementById("actions-toggle-label");
+
 // Vector Icon for Cache Hits
 const svgBolt = `
   <svg class="meta-icon cache" viewBox="0 0 24 24">
@@ -159,6 +183,12 @@ function showToast(message) {
 // The input accepts any model name (so Ollama tags and unlisted providers work),
 // while the dropdown lists what was actually used before and offers deletion.
 
+// activeModel mirrors the model the engine is actually serving with. It is
+// seeded from the engine at startup (which restores the persisted choice) and
+// updated whenever the model is switched, so the send path can tell "the user
+// picked a different model" from "the field still shows the current one".
+let activeModel = "";
+
 async function refreshModelDropdown() {
   if (!(window.go && window.go.main && window.go.main.App)) return;
   let history = [];
@@ -213,6 +243,7 @@ async function refreshModelDropdown() {
       modelTrigger.classList.remove("open");
       if (window.go && window.go.main && window.go.main.App) {
         await window.go.main.App.SetModel(modelName);
+        activeModel = modelName;
       }
       showToast(`Model set to: ${modelName}`);
     });
@@ -226,6 +257,7 @@ async function commitModelInput() {
   if (!val) return;
   if (window.go && window.go.main && window.go.main.App) {
     await window.go.main.App.SetModel(val);
+    activeModel = val;
     // Record it so it shows up next time; harmless if the call fails.
     await window.go.main.App.SaveModelHistory(val).catch(() => {});
   }
@@ -274,6 +306,24 @@ document.addEventListener("click", (e) => {
     modelTrigger.classList.remove("open");
   }
 });
+
+// --- Working Directory ---
+// The header badge tells the user which tree the agent is working in. It is
+// the process working directory, which is also where every intercepted action
+// command is executed.
+async function refreshWorkingDir() {
+  if (!(window.go && window.go.main && window.go.main.App) || !window.go.main.App.GetWorkingDir) return;
+  try {
+    const wd = await window.go.main.App.GetWorkingDir();
+    if (!wd) return;
+    const el = document.getElementById("session-path-text");
+    if (el) el.innerText = wd;
+    const badge = document.getElementById("session-path-badge");
+    if (badge) badge.title = `Operating Working Directory: ${wd}`;
+  } catch (err) {
+    // Non-fatal: the badge simply keeps its placeholder.
+  }
+}
 
 // --- Sessions ---
 async function refreshSessionUI() {
@@ -607,7 +657,16 @@ async function loadSessionIntoChat(sessionId) {
   });
 
   const stats = await window.go.main.App.GetStats();
-  if (stats) statsCost.innerText = `$${stats.total_cost.toFixed(6)}`;
+  if (stats) {
+    statsCost.innerText = `$${stats.total_cost.toFixed(6)}`;
+    // Switching to a conversation adopts the model it was answered with, so
+    // the combobox follows along. activeModel is kept in step, otherwise the
+    // send path would treat it as a fresh choice and persist it.
+    if (stats.model) {
+      activeModel = stats.model;
+      modelInput.value = stats.model;
+    }
+  }
   await refreshSessionUI();
 }
 
@@ -659,15 +718,423 @@ puppetToggle.addEventListener("change", (e) => {
   }
 });
 
+// --- Actions: View Switching & Management ---
+// The whole right pane swaps between the chat and the Actions Management
+// component; view state lives only in the DOM, so scrolling and bubbles
+// survive an out-and-back.
+
+function showView(view) {
+  if (view === "actions") {
+    viewChat.style.display = "none";
+    viewActions.style.display = "flex";
+    loadActionsCards();
+  } else {
+    viewActions.style.display = "none";
+    viewChat.style.display = "flex";
+  }
+}
+
+btnMoreMenu.addEventListener("click", (e) => {
+  e.stopPropagation();
+  moreDropdownMenu.classList.toggle("active");
+});
+document.addEventListener("click", () => moreDropdownMenu.classList.remove("active"));
+moreDropdownMenu.addEventListener("click", (e) => e.stopPropagation());
+
+btnNavActions.addEventListener("click", () => showView("actions"));
+btnNavChat.addEventListener("click", () => showView("chat"));
+btnBackToChat.addEventListener("click", () => showView("chat"));
+
+// Master actions toggle: off means "no tag will ever execute", and the
+// backend injects a system notice so the engine stops emitting action tags.
+actionsMasterToggle.addEventListener("change", async (e) => {
+  const enabled = e.target.checked;
+  actionsToggleLabel.innerText = enabled ? "Actions: Active" : "Actions: Off";
+  actionsToggleLabel.style.color = enabled ? "var(--accent-cyan)" : "var(--text-muted)";
+  if (window.go && window.go.main && window.go.main.App) {
+    await window.go.main.App.SetActionsEnabled(enabled);
+  }
+  showToast(enabled ? "Action tags execution enabled" : "Action tags execution disabled");
+});
+
+// syncActionsToggle pulls the persisted switch state, so a toggle made in an
+// earlier run shows correctly instead of always starting "Active".
+async function syncActionsToggle() {
+  if (!(window.go && window.go.main && window.go.main.App)) return;
+  try {
+    const enabled = await window.go.main.App.GetActionsEnabled();
+    actionsMasterToggle.checked = enabled;
+    actionsToggleLabel.innerText = enabled ? "Actions: Active" : "Actions: Off";
+    actionsToggleLabel.style.color = enabled ? "var(--accent-cyan)" : "var(--text-muted)";
+  } catch (err) {
+    // Non-fatal: the checkbox keeps its markup default.
+  }
+}
+
+// --- Actions Management Cards ---
+async function loadActionsCards() {
+  if (!(window.go && window.go.main && window.go.main.App)) return;
+  const actions = (await window.go.main.App.GetActions()) || [];
+  actionsCardsContainer.innerHTML = "";
+
+  if (actions.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "model-history-empty";
+    empty.innerText = "No actions registered";
+    actionsCardsContainer.appendChild(empty);
+  }
+
+  actions.forEach((act) => {
+    const card = document.createElement("div");
+    card.className = `action-card${act.enabled ? "" : " disabled"}`;
+
+    // Header: the XML tag with its on/off toggle. Built-ins can be turned
+    // off but never deleted or renamed.
+    const header = document.createElement("div");
+    header.className = "action-card-header";
+    header.innerHTML = `
+      <span class="action-tag-badge">&lt;${act.tag}&gt;</span>
+      <label class="toggle-container" title="Enable or disable this action">
+        <input type="checkbox" ${act.enabled ? "checked" : ""}>
+        <span class="slider"></span>
+      </label>
+    `;
+
+    const toggle = header.querySelector("input");
+    toggle.addEventListener("change", async (e) => {
+      await window.go.main.App.ToggleAction(act.id, e.target.checked);
+      card.classList.toggle("disabled", !e.target.checked);
+      showToast(`Action <${act.tag}> ${e.target.checked ? "enabled" : "disabled"}`);
+    });
+
+    const desc = document.createElement("div");
+    desc.className = "action-card-desc";
+    desc.innerText = act.description || "(no description)";
+
+    const cmd = document.createElement("div");
+    cmd.className = "action-card-command";
+    cmd.innerText = act.is_builtin ? "Executes the tag body in shell" : `Command: ${act.command_template}`;
+
+    const footer = document.createElement("div");
+    footer.className = "action-card-footer";
+    footer.innerHTML = `
+      <span class="action-card-badge">${act.is_builtin ? "Built-in (Navi Core)" : "User-Defined"}</span>
+      <div class="session-item-actions">
+        ${!act.is_builtin ? `<button class="btn-item-action btn-edit-act" title="Edit this action">
+          <svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+          </svg>
+        </button>` : ""}
+      </div>
+    `;
+
+    if (!act.is_builtin) {
+      footer.querySelector(".btn-edit-act").addEventListener("click", () => openActionEditor(act));
+    }
+
+    card.appendChild(header);
+    card.appendChild(desc);
+    card.appendChild(cmd);
+    card.appendChild(footer);
+    actionsCardsContainer.appendChild(card);
+  });
+}
+
+// --- Action Editor Modal (create / edit user-defined actions) ---
+let editingActionId = null;
+
+// openActionEditor(null) creates; passing an action edits it in place.
+function openActionEditor(act = null) {
+  if (act) {
+    editingActionId = act.id;
+    actionModalTitle.innerText = "Edit Action";
+    inputActionTag.value = act.tag || "";
+    inputActionDesc.value = act.description || "";
+    inputActionCmd.value = act.command_template || "";
+    inputActionParam.value = act.param_name || "x";
+  } else {
+    editingActionId = null;
+    actionModalTitle.innerText = "Create Action";
+    inputActionTag.value = "";
+    inputActionDesc.value = "";
+    inputActionCmd.value = "";
+    inputActionParam.value = "x";
+  }
+  actionEditorModal.style.display = "flex";
+  inputActionTag.focus();
+}
+
+btnOpenCreateAction.addEventListener("click", () => openActionEditor(null));
+btnCancelActionEdit.addEventListener("click", () => actionEditorModal.style.display = "none");
+actionEditorModal.addEventListener("click", (e) => {
+  if (e.target === actionEditorModal) actionEditorModal.style.display = "none";
+});
+
+btnSaveAction.addEventListener("click", async () => {
+  const tag = inputActionTag.value.trim();
+  const desc = inputActionDesc.value.trim();
+  const cmd = inputActionCmd.value.trim();
+  const param = inputActionParam.value.trim() || "x";
+
+  if (!tag || !cmd) {
+    showToast("Tag and command template are required");
+    return;
+  }
+
+  await window.go.main.App.SaveAction({
+    id: editingActionId || "",
+    tag: tag,
+    description: desc,
+    command_template: cmd,
+    param_name: param,
+    is_builtin: false,
+    enabled: true,
+  });
+
+  actionEditorModal.style.display = "none";
+  await loadActionsCards();
+  showToast(editingActionId ? `Updated action <${tag}>` : `Created action <${tag}>`);
+});
+
+// --- Tag and Output Formatter Helper ---
+// The model speaks in XML-ish tags: `<terminal>pwd</terminal>` is a command
+// request, `<terminal_output>...</terminal_output>` is what the harness fed
+// back. Rendering those raw would look like markup soup, so every tag is
+// lifted out of the text and drawn as a dedicated terminal card.
+
+function formatTagLabel(tag) {
+  if (!tag) return "Terminal";
+  if (tag.toLowerCase() === "terminal") return "Terminal";
+  return tag.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function createActionOutputBanner(tagName, body) {
+  const isOutput = tagName.toLowerCase().endsWith("_output");
+  const cleanTag = isOutput ? tagName.toLowerCase().replace(/_output$/, "") : tagName;
+  const banner = document.createElement("div");
+  banner.className = `action-execution-banner ${isOutput ? "bubble-action-output" : "bubble-action-command"}`;
+
+  const header = document.createElement("div");
+  header.className = "action-banner-header";
+  header.innerHTML = `
+    <svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="4 17 10 11 4 5"/>
+      <line x1="12" y1="19" x2="20" y2="19"/>
+    </svg>
+    <span>${isOutput ? formatTagLabel(cleanTag) + " Output" : "Action &lt;" + tagName + "&gt;"}</span>
+  `;
+
+  const output = document.createElement("div");
+  output.className = "action-banner-output";
+  output.innerText = body;
+
+  banner.appendChild(header);
+  banner.appendChild(output);
+  return banner;
+}
+
+// renderBubbleContent turns a raw message into its display form: plain
+// sentences stay plain sentences, while every tag becomes a terminal card.
+// The raw text is kept on the element so the streaming path can keep
+// appending to it without re-parsing what it already knows.
+function renderBubbleContent(bubbleEl, content) {
+  bubbleEl.rawContent = content;
+  bubbleEl.innerHTML = "";
+
+  if (!content) {
+    return;
+  }
+
+  // Fast path for plain text without tags
+  if (!content.includes("<")) {
+    bubbleEl.innerText = content;
+    return;
+  }
+
+  const tagRegex = /<([a-zA-Z0-9_-]+)>([\s\S]*?)<\/\1>/g;
+  let lastIndex = 0;
+  let match;
+  let matchedAny = false;
+
+  while ((match = tagRegex.exec(content)) !== null) {
+    matchedAny = true;
+    const textBefore = content.substring(lastIndex, match.index);
+    if (textBefore.trim()) {
+      const seg = document.createElement("div");
+      seg.className = "bubble-text-segment";
+      seg.innerText = textBefore.trim();
+      bubbleEl.appendChild(seg);
+    }
+
+    const tagName = match[1];
+    const tagBody = match[2].trim();
+    bubbleEl.appendChild(createActionOutputBanner(tagName, tagBody));
+
+    lastIndex = tagRegex.lastIndex;
+  }
+
+  const remainder = content.substring(lastIndex);
+
+  // If a tag is currently streaming in unclosed
+  const unclosedMatch = /<([a-zA-Z0-9_-]+)>([\s\S]*)$/.exec(remainder);
+  if (unclosedMatch) {
+    const textBeforeUnclosed = remainder.substring(0, unclosedMatch.index);
+    if (textBeforeUnclosed.trim()) {
+      const seg = document.createElement("div");
+      seg.className = "bubble-text-segment";
+      seg.innerText = textBeforeUnclosed.trim();
+      bubbleEl.appendChild(seg);
+    }
+    const unclosedTag = unclosedMatch[1];
+    const unclosedBody = unclosedMatch[2].trim();
+    bubbleEl.appendChild(createActionOutputBanner(unclosedTag, unclosedBody));
+  } else if (remainder.trim()) {
+    const seg = document.createElement("div");
+    seg.className = "bubble-text-segment";
+    seg.innerText = remainder.trim();
+    bubbleEl.appendChild(seg);
+  } else if (!matchedAny && !unclosedMatch) {
+    bubbleEl.innerText = content;
+  }
+}
+
+// --- Real-Time Streaming & Live Interception Listeners ---
+// Tokens arrive continuously; when an action closes, a banner is parked in
+// the stream and filled with the command output, and the next turn's tokens
+// continue in a fresh bubble.
+let activeStreamBubble = null;
+
+function bubbleEl() {
+  if (!activeStreamBubble) {
+    activeStreamBubble = appendBubble("assistant", "");
+  }
+  return activeStreamBubble ? activeStreamBubble.querySelector(".bubble") : null;
+}
+
+function setupStreamListeners() {
+  window.runtime.EventsOn("stream:token", (token) => {
+    const el = bubbleEl();
+    if (!el) return;
+    el.rawContent = (el.rawContent || "") + token;
+    renderBubbleContent(el, el.rawContent);
+    chatBox.scrollTop = chatBox.scrollHeight;
+  });
+
+  window.runtime.EventsOn("stream:action_start", (data) => {
+    // If the active bubble only held the action tag or is empty, remove it so no empty bubble remains
+    if (activeStreamBubble) {
+      const bubble = activeStreamBubble.querySelector(".bubble");
+      if (bubble) {
+        let text = (bubble.rawContent || bubble.innerText || "").trim();
+        const tagPattern = new RegExp(`<${data.tag}>[\\s\\S]*?<\\/${data.tag}>`, "gi");
+        text = text.replace(tagPattern, "").trim();
+        if (!text) {
+          activeStreamBubble.remove();
+        } else {
+          renderBubbleContent(bubble, text);
+        }
+      }
+      activeStreamBubble = null;
+    }
+
+    const banner = document.createElement("div");
+    banner.className = "action-execution-banner live-action";
+    banner.innerHTML = `
+      <div class="action-banner-header">
+        <svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="4 17 10 11 4 5"/>
+          <line x1="12" y1="19" x2="20" y2="19"/>
+        </svg>
+        <span>⚡ Intercepted &lt;${data.tag}&gt;</span>
+        <span style="font-weight: normal; opacity: 0.8;">Running: ${data.command}</span>
+      </div>
+      <div class="action-banner-output">Executing command...</div>
+    `;
+    chatBox.appendChild(banner);
+    chatBox.scrollTop = chatBox.scrollHeight;
+  });
+
+  window.runtime.EventsOn("stream:action_result", (data) => {
+    const banners = chatBox.querySelectorAll(".action-execution-banner.live-action");
+    if (banners.length > 0) {
+      const banner = banners[banners.length - 1];
+      const out = banner.querySelector(".action-banner-output");
+      if (out) {
+        let text = data.output || "";
+        const m = /<[a-zA-Z0-9_-]+_output>([\s\S]*?)<\/[a-zA-Z0-9_-]+_output>/i.exec(text);
+        if (m) {
+          text = m[1].trim();
+        }
+        out.innerText = text;
+      }
+    }
+    chatBox.scrollTop = chatBox.scrollHeight;
+  });
+
+  window.runtime.EventsOn("stream:complete", (res) => {
+    if (activeStreamBubble) {
+      const bubble = activeStreamBubble.querySelector(".bubble");
+      if (bubble) {
+        const text = (bubble.rawContent || bubble.innerText || "").trim();
+        if (!text) {
+          activeStreamBubble.remove();
+        } else {
+          renderBubbleContent(bubble, text);
+        }
+      }
+    }
+    activeStreamBubble = null;
+
+    if (res && res.meta) {
+      statsCost.innerText = `$${res.meta.session_cost.toFixed(6)}`;
+      refreshSessionUI();
+      // Resetting the sidebar model meta keeps chat rows in sync when a
+      // streamed turn was the first use of a new model.
+      renderSessionsList();
+
+      // The streamed turn never went through appendBubble's meta path, so
+      // the token/cost line is attached to the finished bubble here.
+      const assistantMsgs = chatBox.querySelectorAll(".message.assistant");
+      if (assistantMsgs.length > 0) {
+        const lastMsg = assistantMsgs[assistantMsgs.length - 1];
+        if (!lastMsg.querySelector(".meta-info")) {
+          const metaDiv = document.createElement("div");
+          metaDiv.className = "meta-info";
+          metaDiv.innerHTML = res.meta.cached
+            ? `${svgBolt} CACHE HIT · $0.000000`
+            : `In: ${res.meta.prompt_tokens} Out: ${res.meta.output_tokens} · Turn: $${res.meta.turn_cost.toFixed(6)}`;
+          lastMsg.appendChild(metaDiv);
+        }
+      }
+    }
+  });
+
+  window.runtime.EventsOn("stream:error", (err) => {
+    if (activeStreamBubble) {
+      const bubble = activeStreamBubble.querySelector(".bubble");
+      if (bubble && !(bubble.rawContent || bubble.innerText || "").trim()) {
+        activeStreamBubble.remove();
+      }
+    }
+    appendBubble("system", `Streaming error: ${err}`);
+    activeStreamBubble = null;
+  });
+}
+
+// Listeners attach only under the real Wails runtime. Without it (plain
+// browser dev) there is no event bridge, so callers fall back to Ask.
+if (window.runtime && typeof window.runtime.EventsOn === "function") {
+  setupStreamListeners();
+}
+
 // --- Message Sending Logic ---
 async function handleSend() {
   const text = promptInput.value.trim();
   if (!text) return;
   promptInput.value = "";
 
-  const isPuppet = puppetToggle.checked;
-
-  if (isPuppet) {
+  if (puppetToggle.checked) {
     // Injected manually by human
     appendBubble("assistant", text, "Injected Manually · $0.00", true);
     if (window.go && window.go.main && window.go.main.App) {
@@ -683,13 +1150,24 @@ async function handleSend() {
   if (window.go && window.go.main && window.go.main.App) {
     try {
       // Sync the combobox before asking, so a typed-but-not-committed model is
-      // used for this turn and recorded in history too.
+      // used for this turn and recorded in history too. Setting the model
+      // again would be a no-op with a side effect - it clears the response
+      // cache - so it only happens when the model actually changed.
       const currModel = modelInput.value.trim();
-      if (currModel) {
+      if (currModel && currModel !== activeModel) {
         await window.go.main.App.SetModel(currModel);
+        activeModel = currModel;
         await window.go.main.App.SaveModelHistory(currModel).catch(() => {});
       }
 
+      if (window.runtime && typeof window.runtime.EventsOn === "function") {
+        // Live streaming with token-by-token action interception.
+        activeStreamBubble = null;
+        await window.go.main.App.AskStream(text);
+        return;
+      }
+
+      // Fallback (no Wails runtime): the original one-shot path.
       const res = await window.go.main.App.Ask(text);
       const meta = res.meta.cached
         ? `${svgBolt} CACHE HIT · $0.000000`
@@ -699,6 +1177,7 @@ async function handleSend() {
       statsCost.innerText = `$${res.meta.session_cost.toFixed(6)}`;
     } catch (err) {
       appendBubble("system", `Error: ${err}`);
+      activeStreamBubble = null;
     }
   }
 }
@@ -709,7 +1188,7 @@ function appendBubble(role, content, metaHtml = "", isPuppet = false) {
 
   const bubble = document.createElement("div");
   bubble.className = "bubble";
-  bubble.innerText = content;
+  renderBubbleContent(bubble, content);
   msg.appendChild(bubble);
 
   if (metaHtml) {
@@ -725,6 +1204,7 @@ function appendBubble(role, content, metaHtml = "", isPuppet = false) {
 
   chatBox.appendChild(msg);
   chatBox.scrollTop = chatBox.scrollHeight;
+  return msg;
 }
 
 btnSend.addEventListener("click", handleSend);
@@ -745,6 +1225,15 @@ btnCopyContext.addEventListener("click", async () => {
 });
 
 btnDumpContext.addEventListener("click", async () => {
+  // Writing a file is a side effect the user may not want, so it is
+  // confirmed in the app's own dialog rather than the native webview one.
+  const confirmed = await showCustomDialog(
+    "Dump Context Window?",
+    "Export the entire current context window to a local .txt file in the operating directory?",
+    true
+  );
+  if (!confirmed) return;
+
   if (window.go && window.go.main && window.go.main.App) {
     try {
       const path = await window.go.main.App.DumpContext();
@@ -847,14 +1336,21 @@ window.addEventListener("DOMContentLoaded", async () => {
   try {
     const stats = await window.go.main.App.GetStats();
     if (stats) {
-      // Cost is shown, but the model input stays empty by design: with the
-      // field blank the engine keeps its configured default, and typing any
-      // model name here switches it on demand.
       statsCost.innerText = `$${stats.total_cost.toFixed(6)}`;
+      // The engine restores the model that was set in the last run, so show
+      // it in the combobox: the field then reflects what is actually in use
+      // instead of hiding it behind an empty input.
+      if (stats.model) {
+        activeModel = stats.model;
+        modelInput.value = stats.model;
+      }
     }
   } catch (err) {
     // Non-fatal: the chat pane is still usable without stats.
   }
+
+  // The path the session is operating in, shown next to the session name.
+  await refreshWorkingDir().catch(() => {});
 
   try {
     const active = await window.go.main.App.GetActiveSession();
@@ -870,4 +1366,8 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   // Provider pill in the topbar, matching wherever the engine points now.
   await refreshActiveProviderUI().catch(() => {});
+
+  // Actions master toggle and the management view's initial cards.
+  await syncActionsToggle().catch(() => {});
+  await loadActionsCards().catch(() => {});
 });

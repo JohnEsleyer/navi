@@ -1,5 +1,29 @@
 export namespace navi {
 	
+	export class Action {
+	    id: string;
+	    tag: string;
+	    description: string;
+	    command_template: string;
+	    param_name: string;
+	    is_builtin: boolean;
+	    enabled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Action(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.tag = source["tag"];
+	        this.description = source["description"];
+	        this.command_template = source["command_template"];
+	        this.param_name = source["param_name"];
+	        this.is_builtin = source["is_builtin"];
+	        this.enabled = source["enabled"];
+	    }
+	}
 	export class MessageRecord {
 	    id: string;
 	    session_id: string;

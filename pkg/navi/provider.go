@@ -157,6 +157,23 @@ func DetectProvider(model string) Provider {
 		}
 	}
 
+	// Namespaced models ("openai/gpt-oss-120b") belong to the provider that
+	// owns the namespace. Aggregators publish vendor-prefixed names, so the
+	// registry carries one representative per namespace ("openai/gpt-oss-20b"
+	// for OpenRouter) and the part in front of the slash is the routing
+	// signal. Without this, such a model would fall through to the custom
+	// provider and be sent to the wrong endpoint.
+	if idx := strings.Index(modelLower, "/"); idx > 0 {
+		namespace := modelLower[:idx+1]
+		for _, p := range KnownProviders {
+			for _, m := range p.Models {
+				if strings.HasPrefix(strings.ToLower(m), namespace) {
+					return p
+				}
+			}
+		}
+	}
+
 	for _, p := range KnownProviders {
 		for _, m := range p.Models {
 			if strings.EqualFold(m, modelLower) {

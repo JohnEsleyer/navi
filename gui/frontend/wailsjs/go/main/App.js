@@ -6,8 +6,16 @@ export function Ask(arg1) {
   return window['go']['main']['App']['Ask'](arg1);
 }
 
+export function AskStream(arg1) {
+  return window['go']['main']['App']['AskStream'](arg1);
+}
+
 export function CreateSession(arg1) {
   return window['go']['main']['App']['CreateSession'](arg1);
+}
+
+export function DeleteAction(arg1) {
+  return window['go']['main']['App']['DeleteAction'](arg1);
 }
 
 export function DeleteModelHistory(arg1) {
@@ -20,6 +28,14 @@ export function DeleteSession(arg1) {
 
 export function DumpContext() {
   return window['go']['main']['App']['DumpContext']();
+}
+
+export function GetActions() {
+  return window['go']['main']['App']['GetActions']();
+}
+
+export function GetActionsEnabled() {
+  return window['go']['main']['App']['GetActionsEnabled']();
 }
 
 export function GetAPIKey() {
@@ -58,6 +74,10 @@ export function GetStats() {
   return window['go']['main']['App']['GetStats']();
 }
 
+export function GetWorkingDir() {
+  return window['go']['main']['App']['GetWorkingDir']();
+}
+
 export function ListSessions() {
   return window['go']['main']['App']['ListSessions']();
 }
@@ -82,12 +102,20 @@ export function ResetHistory() {
   return window['go']['main']['App']['ResetHistory']();
 }
 
+export function SaveAction(arg1) {
+  return window['go']['main']['App']['SaveAction'](arg1);
+}
+
 export function SaveModelHistory(arg1) {
   return window['go']['main']['App']['SaveModelHistory'](arg1);
 }
 
 export function SetAPIKey(arg1) {
   return window['go']['main']['App']['SetAPIKey'](arg1);
+}
+
+export function SetActionsEnabled(arg1) {
+  return window['go']['main']['App']['SetActionsEnabled'](arg1);
 }
 
 export function SetBaseURL(arg1) {
@@ -104,4 +132,8 @@ export function SwitchSession(arg1) {
 
 export function SwitchProvider(arg1) {
   return window['go']['main']['App']['SwitchProvider'](arg1);
+}
+
+export function ToggleAction(arg1, arg2) {
+  return window['go']['main']['App']['ToggleAction'](arg1, arg2);
 }

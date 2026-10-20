@@ -132,6 +132,16 @@ type Engine struct {
 	// the reverse, so the two cannot deadlock.
 	sessionMu     sync.RWMutex
 	activeSession *Session
+
+	// actions owns the live action registry (the <terminal> style tags the
+	// streaming harness intercepts). Set once in New, so the field itself is
+	// immutable; the manager carries its own lock.
+	actions *ActionManager
+
+	// settings persists the model, API key and endpoint between runs so the
+	// GUI comes back exactly as the user left it. Set once in New; the store
+	// carries its own lock.
+	settings *SettingsStore
 }
 
 func New(cfg Config) *Engine {
@@ -141,11 +151,53 @@ func New(cfg Config) *Engine {
 	if cfg.SystemPrompt == "" {
 		cfg.SystemPrompt = "You are Navi, an ultra-efficient, cost-conscious assistant. Keep answers concise."
 	}
+
+	// The chat database and the settings file live side by side, so the
+	// persistence lives in the same place whether the caller asked for the
+	// default location or pointed at a custom one.
+	storePath := cfg.DBPath
+	if storePath == "" {
+		storePath = defaultDBPath()
+	}
+
+	var settings *SettingsStore
+	if storePath == ":memory:" {
+		// Ephemeral engines (the test suite) must not touch the disk.
+		settings = NewSettingsStore(":memory:")
+	} else {
+		settings = NewSettingsStore(filepath.Join(filepath.Dir(storePath), "settings.json"))
+	}
+
+	// Anything the caller did not supply explicitly falls back to what was
+	// persisted last time. An explicit environment variable or argument
+	// always wins, so a one-off override still works.
+	saved := settings.Get()
+	if cfg.Model == "" {
+		cfg.Model = saved.Model
+	}
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = saved.BaseURL
+	}
+
 	if cfg.Model == "" {
 		cfg.Model = "llama-3.1-8b-instant"
 	}
 
 	provider := DetectProvider(cfg.Model)
+
+	// The key follows the same rule: an explicitly supplied one is never
+	// touched. Otherwise the key saved for this exact provider is the most
+	// precise match, with the globally saved key as the fallback.
+	if cfg.APIKey == "" {
+		if provider.ID != "" {
+			if pKey := strings.TrimSpace(saved.ProviderKeys[provider.ID]); pKey != "" {
+				cfg.APIKey = pKey
+			}
+		}
+		if cfg.APIKey == "" {
+			cfg.APIKey = saved.APIKey
+		}
+	}
 
 	// Record whether the CALLER supplied an endpoint, before the resolution
 	// below fills one in. Doing this after the fill would see a non-empty
@@ -167,6 +219,9 @@ func New(cfg Config) *Engine {
 	}
 
 	pKeys := make(map[string]string)
+	for k, v := range saved.ProviderKeys {
+		pKeys[k] = v
+	}
 	if provider.ID != "" && cfg.APIKey != "" {
 		pKeys[provider.ID] = cfg.APIKey
 	}
@@ -175,6 +230,7 @@ func New(cfg Config) *Engine {
 		cfg:           cfg,
 		customBaseURL: callerSetBaseURL,
 		providerKeys:  pKeys,
+		settings:      settings,
 		client:        &http.Client{Timeout: 60 * time.Second},
 		cache:         make(map[string]string),
 		history:       []Message{{Role: "system", Content: cfg.SystemPrompt}},
@@ -191,6 +247,20 @@ func New(cfg Config) *Engine {
 	}
 	eng.store = store
 
+	// Action definitions persist next to the chat database, so user-defined
+	// actions survive restarts exactly like conversations do. Ephemeral
+	// engines (tests, and anything pointed at ":memory:") skip the file
+	// entirely to stay hermetic.
+	if storePath == ":memory:" {
+		eng.actions = NewActionManager("")
+	} else {
+		eng.actions = NewActionManager(filepath.Join(filepath.Dir(storePath), "actions.json"))
+	}
+	// Any change to the registry refreshes the action catalogue in the
+	// context window, so the model - and the user copying that window - see
+	// the current set of actions right away.
+	eng.actions.SetOnChange(eng.syncSystemPrompt)
+
 	// Resume the most recently updated conversation, or start one. Ordering
 	// is by updated_at so a returning user lands where they left off.
 	if store != nil {
@@ -203,7 +273,55 @@ func New(cfg Config) *Engine {
 		_ = store.SaveModelHistory(cfg.Model)
 	}
 
+	// The context window opens with the action catalogue already in the
+	// system message, so the very first question knows what it may run.
+	eng.syncSystemPrompt()
+
 	return eng
+}
+
+// effectiveSystemPrompt is the system prompt the model actually receives:
+// the configured prompt plus the live action catalogue and the operating
+// directory.
+//
+// The actions live in the context window itself rather than being patched
+// onto the outgoing request, so what the user copies or dumps is exactly
+// what the model sees - and toggling an action updates the window at once.
+func (e *Engine) effectiveSystemPrompt() string {
+	e.cfgMu.RLock()
+	base := e.cfg.SystemPrompt
+	e.cfgMu.RUnlock()
+	if e.actions != nil {
+		base += e.actions.GenerateSystemPromptInstructions()
+	}
+	return base
+}
+
+// syncSystemPrompt refreshes the system message in the context window so it
+// carries the current action catalogue.
+func (e *Engine) syncSystemPrompt() {
+	eff := e.effectiveSystemPrompt()
+	e.historyMu.Lock()
+	defer e.historyMu.Unlock()
+	if len(e.history) > 0 && e.history[0].Role == "system" {
+		e.history[0].Content = eff
+		return
+	}
+	e.history = append([]Message{{Role: "system", Content: eff}}, e.history...)
+}
+
+// SyncSystemPrompt refreshes the system prompt in the context window with
+// the current actions. The GUI calls it whenever an action is added,
+// removed, toggled, or the master switch flips, so the change is visible
+// immediately - in the next request and in the copied context window.
+func (e *Engine) SyncSystemPrompt() {
+	e.syncSystemPrompt()
+}
+
+// ActionManager exposes the live action registry for bindings. The manager is
+// safe for concurrent use, so callers may hold the pointer and mutate it.
+func (e *Engine) ActionManager() *ActionManager {
+	return e.actions
 }
 
 func (e *Engine) hash(messages []Message) string {
@@ -423,11 +541,10 @@ func (e *Engine) loadSessionHistory(sessionID string) {
 	// Read the config before taking historyMu rather than inside it, so the
 	// two locks are never nested in either order.
 	e.cfgMu.RLock()
-	sys := e.cfg.SystemPrompt
 	maxHist := e.cfg.MaxHistory
 	e.cfgMu.RUnlock()
 
-	history := []Message{{Role: "system", Content: sys}}
+	history := []Message{{Role: "system", Content: e.effectiveSystemPrompt()}}
 	for _, m := range msgs {
 		history = append(history, Message{Role: m.Role, Content: m.Content})
 	}
@@ -461,11 +578,11 @@ func (e *Engine) baseURL() string {
 }
 
 // SetAPIKey swaps the key used for subsequent requests, for the current
-// provider, without restarting the session.
+// provider, without restarting the session. The key is also persisted, so it
+// survives a restart instead of having to be retyped every launch.
 func (e *Engine) SetAPIKey(key string) {
 	key = strings.TrimSpace(key)
 	e.cfgMu.Lock()
-	defer e.cfgMu.Unlock()
 	e.cfg.APIKey = key
 	provider := DetectProvider(e.cfg.Model)
 	if provider.ID != "" {
@@ -473,6 +590,19 @@ func (e *Engine) SetAPIKey(key string) {
 			e.providerKeys = make(map[string]string)
 		}
 		e.providerKeys[provider.ID] = key
+	}
+	e.cfgMu.Unlock()
+
+	if e.settings != nil {
+		e.settings.Update(func(st *Settings) {
+			st.APIKey = key
+			if provider.ID != "" {
+				if st.ProviderKeys == nil {
+					st.ProviderKeys = make(map[string]string)
+				}
+				st.ProviderKeys[provider.ID] = key
+			}
+		})
 	}
 }
 
@@ -487,13 +617,20 @@ func (e *Engine) MaskedAPIKey() string {
 }
 
 // SetBaseURL repoints the engine at another OpenAI-compatible endpoint and
-// marks it explicit, so later SetModel calls leave it alone.
+// marks it explicit, so later SetModel calls leave it alone. The endpoint is
+// persisted as well, so a custom server survives a restart.
 func (e *Engine) SetBaseURL(url string) {
 	url = strings.TrimRight(strings.TrimSpace(url), "/")
 	e.cfgMu.Lock()
-	defer e.cfgMu.Unlock()
 	e.cfg.BaseURL = url
 	e.customBaseURL = url != ""
+	e.cfgMu.Unlock()
+
+	if e.settings != nil {
+		e.settings.Update(func(st *Settings) {
+			st.BaseURL = url
+		})
+	}
 }
 
 func (e *Engine) GetBaseURL() string {
@@ -582,9 +719,12 @@ func (e *Engine) GetContextText() string {
 }
 
 func (e *Engine) ResetHistory() {
+	// The prompt is built before the lock is taken, so no lock is ever held
+	// while another one is acquired.
+	eff := e.effectiveSystemPrompt()
 	e.historyMu.Lock()
 	defer e.historyMu.Unlock()
-	e.history = []Message{{Role: "system", Content: e.cfg.SystemPrompt}}
+	e.history = []Message{{Role: "system", Content: eff}}
 }
 
 func (e *Engine) ClearCache() {
@@ -597,11 +737,25 @@ func (e *Engine) ClearCache() {
 // endpoint moves with the model unless the endpoint was explicitly set, and
 // the remembered key for the new provider is restored if there is one.
 //
+// The choice is persisted, so the next launch starts on the same model
+// instead of falling back to the default.
+//
 // It also clears the response cache, because the cache key is a hash of the
 // message list only and carries no model identity - without this, switching
 // models keeps serving the previous model's cached replies.
 func (e *Engine) SetModel(model string) {
+	e.setModel(model, true)
+}
+
+// setModel switches the active model. persist decides whether the choice is
+// written to settings.json: switching to a saved conversation adopts that
+// conversation's model, which is a browsing decision and must not overwrite
+// the model the user picked for the app.
+func (e *Engine) setModel(model string, persist bool) {
 	model = strings.TrimSpace(model)
+	if model == "" {
+		return
+	}
 	provider := DetectProvider(model)
 
 	e.cfgMu.Lock()
@@ -625,6 +779,30 @@ func (e *Engine) SetModel(model string) {
 		}
 	}
 	e.cfgMu.Unlock()
+
+	// 1. Remember it for the next launch.
+	if persist && e.settings != nil {
+		e.settings.Update(func(st *Settings) {
+			st.Model = model
+		})
+	}
+
+	// 2. Record it on the active conversation, so the session list stays
+	// honest and switching back to it restores the model.
+	e.sessionMu.RLock()
+	activeID := ""
+	if e.activeSession != nil {
+		activeID = e.activeSession.ID
+	}
+	e.sessionMu.RUnlock()
+	if activeID != "" {
+		_ = e.UpdateSessionModel(activeID, model)
+	}
+
+	// 3. Keep the model history current.
+	if e.store != nil {
+		_ = e.store.SaveModelHistory(model)
+	}
 
 	e.ClearCache()
 }

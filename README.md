@@ -21,7 +21,7 @@ Navi is a cost-optimized, low-latency AI harness written in Go. The core engine 
 | `/clear` | — | Reset context window to drop token consumption |
 | `/stats` | — | View cumulative session spend, tokens, and cache count |
 | `/model` | `<name>` | Inspect or switch model on the fly |
-| `/key` | `[api_key]` | Inspect or set the API key for this session |
+| `/key` | `[api_key]` | Inspect or set the API key (saved to the config dir) |
 | `/baseurl` | `[url]` | Inspect or set the endpoint (e.g. an Ollama server) |
 | `/history` | — | Inspect current sliding context memory |
 | `/exit` | — | Quit session and view total cost |

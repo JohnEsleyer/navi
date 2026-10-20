@@ -4,13 +4,21 @@ import {navi} from '../models';
 
 export function Ask(arg1:string):Promise<navi.Result>;
 
+export function AskStream(arg1:string):Promise<boolean>;
+
 export function CreateSession(arg1:string):Promise<navi.Session>;
+
+export function DeleteAction(arg1:string):Promise<boolean>;
 
 export function DeleteModelHistory(arg1:string):Promise<boolean>;
 
 export function DeleteSession(arg1:string):Promise<boolean>;
 
 export function DumpContext():Promise<string>;
+
+export function GetActions():Promise<Array<navi.Action>>;
+
+export function GetActionsEnabled():Promise<boolean>;
 
 export function GetAPIKey():Promise<string>;
 
@@ -30,6 +38,8 @@ export function GetSessionMessages(arg1:string):Promise<Array<navi.MessageRecord
 
 export function GetStats():Promise<navi.Stats>;
 
+export function GetWorkingDir():Promise<string>;
+
 export function ListSessions():Promise<Array<navi.Session>>;
 
 export function MaskedAPIKey():Promise<string>;
@@ -42,9 +52,13 @@ export function UpdateSession(arg1:string,arg2:string,arg3:string):Promise<boole
 
 export function ResetHistory():Promise<boolean>;
 
+export function SaveAction(arg1:navi.Action):Promise<navi.Action>;
+
 export function SaveModelHistory(arg1:string):Promise<boolean>;
 
 export function SetAPIKey(arg1:string):Promise<boolean>;
+
+export function SetActionsEnabled(arg1:boolean):Promise<boolean>;
 
 export function SetBaseURL(arg1:string):Promise<boolean>;
 
@@ -53,3 +67,5 @@ export function SetModel(arg1:string):Promise<boolean>;
 export function SwitchSession(arg1:string):Promise<navi.Session>;
 
 export function SwitchProvider(arg1:string):Promise<navi.ProviderInfo>;
+
+export function ToggleAction(arg1:string,arg2:boolean):Promise<boolean>;

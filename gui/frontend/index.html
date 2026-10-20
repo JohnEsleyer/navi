@@ -197,6 +197,32 @@
           </svg>
           <span>Clear</span>
         </button>
+
+        <!-- Top-Right More Menu Bar Button: future toolbar buttons live here -->
+        <div class="more-menu-wrapper" id="more-menu-wrapper">
+          <button class="btn btn-icon" id="btn-more-menu" title="Menu &amp; Extras">
+            <svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="3" y1="12" x2="21" y2="12"/>
+              <line x1="3" y1="6" x2="21" y2="6"/>
+              <line x1="3" y1="18" x2="21" y2="18"/>
+            </svg>
+          </button>
+          <div class="more-dropdown-menu" id="more-dropdown-menu">
+            <button class="more-menu-item" id="btn-nav-actions">
+              <svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="4 17 10 11 4 5"/>
+                <line x1="12" y1="19" x2="20" y2="19"/>
+              </svg>
+              <span>Actions Management</span>
+            </button>
+            <button class="more-menu-item" id="btn-nav-chat">
+              <svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+              </svg>
+              <span>Chat View</span>
+            </button>
+          </div>
+        </div>
       </div>
     </header>
 
@@ -222,48 +248,95 @@
         <div class="sessions-list" id="sessions-list"></div>
       </aside>
 
-      <!-- Main Chat Area -->
-      <div class="chat-main-area">
-        <div class="chat-header-bar">
-          <div class="active-session-meta">
-            <div id="active-session-avatar"></div>
-            <span id="active-session-label" class="active-session-title">Chats</span>
+      <!-- Main Chat Area: hosts the swap between Chat and Actions Management -->
+      <div class="chat-main-area" id="chat-main-area">
+
+        <!-- Component 1: Chat View -->
+        <div class="view-panel" id="view-chat">
+          <div class="chat-header-bar">
+            <div class="active-session-meta">
+              <div id="active-session-avatar"></div>
+              <span id="active-session-label" class="active-session-title">Chats</span>
+              <div class="session-path-badge" id="session-path-badge" title="Operating Working Directory">
+                <svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                </svg>
+                <span id="session-path-text">...</span>
+              </div>
+            </div>
+          </div>
+
+          <main class="chat-container" id="chat-box">
+            <div class="message system">
+              <div class="bubble">Navi harness initialized. Context window active.</div>
+            </div>
+          </main>
+
+          <footer class="input-panel">
+            <!-- Toggles sit relative to the Mode selector, in one toolbar -->
+            <div class="toggles-toolbar">
+              <!-- Puppet Mode (Pretend to be AI) Toggle -->
+              <div class="role-selector">
+                <label class="toggle-container" title="When active, you write responses as the AI without making API calls.">
+                  <input type="checkbox" id="puppet-mode-toggle">
+                  <span class="slider"></span>
+                  <span class="toggle-content">
+                    <svg class="ui-icon mode-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                      <circle cx="12" cy="7" r="4"/>
+                    </svg>
+                    <span class="toggle-label" id="role-label">Mode: User</span>
+                  </span>
+                </label>
+              </div>
+
+              <!-- Live Actions Toggle: if off, agent tags are never executed -->
+              <div class="actions-toggle-selector">
+                <label class="toggle-container" title="When off, the agent cannot execute terminal action tags; a notice tells it actions are disabled.">
+                  <input type="checkbox" id="actions-master-toggle" checked>
+                  <span class="slider actions-slider"></span>
+                  <span class="toggle-content">
+                    <svg class="ui-icon mode-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="4 17 10 11 4 5"/>
+                      <line x1="12" y1="19" x2="20" y2="19"/>
+                    </svg>
+                    <span class="toggle-label" id="actions-toggle-label">Actions: Active</span>
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            <div class="input-wrapper">
+              <textarea id="prompt-input" rows="1" placeholder="Type a message or press Shift+Enter for newline..."></textarea>
+              <button id="btn-send" class="btn-send" title="Send message">
+                <!-- Send Paper Plane Icon -->
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="22" y1="2" x2="11" y2="13"/>
+                  <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                </svg>
+              </button>
+            </div>
+          </footer>
+        </div>
+
+        <!-- Component 2: Actions Management View (replaces the chat pane) -->
+        <div class="view-panel" id="view-actions" style="display: none;">
+          <div class="actions-view-header">
+            <div>
+              <h2>Actions Management</h2>
+              <p>Configure the XML tags the agent uses and the harness executes live.</p>
+            </div>
+            <div class="actions-header-controls">
+              <button class="btn btn-primary" id="btn-open-create-action">+ New Action</button>
+              <button class="btn" id="btn-back-to-chat">Back to Chat</button>
+            </div>
+          </div>
+
+          <div class="actions-grid" id="actions-cards-container">
+            <!-- Populated with Action Card components -->
           </div>
         </div>
 
-        <main class="chat-container" id="chat-box">
-          <div class="message system">
-            <div class="bubble">Navi harness initialized. Context window active.</div>
-          </div>
-        </main>
-
-        <footer class="input-panel">
-          <!-- Puppet Mode (Pretend to be AI) Toggle -->
-          <div class="role-selector">
-            <label class="toggle-container" title="When active, you write responses as the AI without making API calls.">
-              <input type="checkbox" id="puppet-mode-toggle">
-              <span class="slider"></span>
-              <span class="toggle-content">
-                <svg class="ui-icon mode-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-                  <circle cx="12" cy="7" r="4"/>
-                </svg>
-                <span class="toggle-label" id="role-label">Mode: User</span>
-              </span>
-            </label>
-          </div>
-
-          <div class="input-wrapper">
-            <textarea id="prompt-input" rows="1" placeholder="Type a message or press Shift+Enter for newline..."></textarea>
-            <button id="btn-send" class="btn-send" title="Send message">
-              <!-- Send Paper Plane Icon -->
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="22" y1="2" x2="11" y2="13"/>
-                <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-              </svg>
-            </button>
-          </div>
-        </footer>
       </div>
     </div>
   </div>
@@ -339,11 +412,37 @@
           <span id="key-masked-display">Current: (not set)</span>
           <button class="btn-text" id="btn-toggle-key-visibility" type="button">Show</button>
         </div>
-        <p class="key-hint">Stored in memory for this session only — never written to disk. Use an environment variable (e.g. GROQ_API_KEY) for a persistent key.</p>
+        <p class="key-hint">Saved to the Navi config directory (readable by your user only) so it survives a restart. An environment variable (e.g. GROQ_API_KEY) still overrides it for a single run.</p>
       </div>
       <div class="modal-actions">
         <button class="btn" id="key-modal-cancel">Cancel</button>
         <button class="btn btn-primary" id="key-modal-save">Save Key</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Create / Edit User-Defined Action -->
+  <div class="custom-modal-backdrop" id="action-editor-modal">
+    <div class="custom-modal-card">
+      <h3 id="action-modal-title">Create Action</h3>
+      <p>Define an XML tag and the shell command it executes.</p>
+      <div class="key-modal-body">
+        <label class="modal-label" for="input-action-tag">XML Tag Name</label>
+        <input type="text" id="input-action-tag" class="modal-input" placeholder="e.g. create-folder, git-status" autocomplete="off">
+
+        <label class="modal-label" for="input-action-desc" style="margin-top: 8px;">Description</label>
+        <input type="text" id="input-action-desc" class="modal-input" placeholder="e.g. Creates a new directory in the workspace" autocomplete="off">
+
+        <label class="modal-label" for="input-action-cmd" style="margin-top: 8px;">Terminal Command Template</label>
+        <input type="text" id="input-action-cmd" class="modal-input" placeholder="e.g. mkdir {x} or git status" autocomplete="off">
+
+        <label class="modal-label" for="input-action-param" style="margin-top: 8px;">Parameter Variable Name</label>
+        <input type="text" id="input-action-param" class="modal-input" placeholder="e.g. x (replaced by the tag content)" autocomplete="off">
+        <p class="key-hint">Example: &lt;create-folder&gt;books&lt;/create-folder&gt; executes <code>mkdir books</code>.</p>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="btn-cancel-action-edit">Cancel</button>
+        <button class="btn btn-primary" id="btn-save-action">Save Action</button>
       </div>
     </div>
   </div>

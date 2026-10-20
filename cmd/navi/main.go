@@ -265,7 +265,7 @@ func registerCommands() {
 					ColorYellow, engine.MaskedAPIKey(), ColorReset,
 					ColorCyan, engine.GetBaseURL(), ColorReset)
 				fmt.Printf("Run %s/key <your-api-key>%s to update it.\n", ColorBold, ColorReset)
-				fmt.Printf("%sKeys are per-session and never written to disk.%s\n", ColorDim, ColorReset)
+				fmt.Printf("%sThe key is saved to the Navi config directory, so it survives a restart.%s\n", ColorDim, ColorReset)
 				return false
 			}
 			engine.SetAPIKey(args)

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"navi/pkg/navi"
@@ -124,5 +126,48 @@ func TestKeyAndBaseURLCommandsAreFree(t *testing.T) {
 	// Display must never expose the raw secret.
 	if app.MaskedAPIKey() == "my-new-token" {
 		t.Error("MaskedAPIKey returned the raw key")
+	}
+}
+
+// TestSettingsSurviveRestart proves the GUI remembers what the user set.
+// The complaint was that every launch started over: a blank API key and the
+// default model, no matter what was chosen the day before.
+func TestSettingsSurviveRestart(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("NAVI_DB_PATH", filepath.Join(dir, "navi.db"))
+	// Keep the ambient environment out of the picture: an explicit env var
+	// overrides the persisted value by design.
+	t.Setenv("NAVI_MODEL", "")
+	t.Setenv("NAVI_API_KEY", "")
+	t.Setenv("NAVI_BASE_URL", "")
+
+	first := NewApp()
+	first.SetModel("gpt-4o-mini")
+	first.SetAPIKey("sk-gui-key")
+
+	// A second launch of the app must pick both values back up.
+	second := NewApp()
+	if got := second.GetStats().Model; got != "gpt-4o-mini" {
+		t.Errorf("model was not persisted across restarts: got %q, want %q", got, "gpt-4o-mini")
+	}
+	if got := second.GetAPIKey(); got != "sk-gui-key" {
+		t.Errorf("api key was not persisted across restarts: got %q, want %q", got, "sk-gui-key")
+	}
+}
+
+// TestGetWorkingDir backs the path badge in the chat header: it must report
+// the directory the action commands actually run in.
+func TestGetWorkingDir(t *testing.T) {
+	app := NewApp()
+	got := app.GetWorkingDir()
+	if got == "" {
+		t.Fatal("GetWorkingDir returned nothing")
+	}
+	want, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd: %v", err)
+	}
+	if got != want {
+		t.Errorf("GetWorkingDir = %q, want %q", got, want)
 	}
 }
